@@ -33,7 +33,6 @@ class Storage(db.EmbeddedDocument):
 
 class State(db.EmbeddedDocument):
     expiry_date = DateTimeField()
-    intention = StringField()
     reason = StringField()
 
 

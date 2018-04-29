@@ -1,11 +1,11 @@
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Blueprint
 from voluptuous import Schema, Required, Coerce, Boolean, Email, REMOVE_EXTRA
 from mongoengine.errors import NotUniqueError, InvalidDocumentError
 
 from .utils import sanitize_keys
-from app.models import Dataset, Visit, PrincipalInvestigator, Storage, State
+from app.models import Dataset, Visit, PrincipalInvestigator, Storage, State, Policy
 from toolset.decorators import dataschema, DateField
 from toolset import ApiResponse, ApiError, StatusCode
 
@@ -111,16 +111,27 @@ def delete_dataset(epn):
 }, extra=REMOVE_EXTRA))
 def update_visit(epn, **kwargs):
     try:
-        ds = Dataset.objects(epn=epn)
-        if ds.first() is not None:
+        ds_query = Dataset.objects(epn=epn)
+        ds = ds_query.first()
+        if ds is not None:
+
+            # update the visit information
             update_dict = {
                 'set__visit__' + sanitize_keys(k): v for k, v in kwargs.items()
             }
-            ds.update_one(**update_dict)
+            ds_query.update_one(**update_dict)
+
+            # if the visit start date is being set and the expiry date
+            # hasn't been set yet, set it based on the beamline policy
+            pl = Policy.objects(beamline=ds.beamline).first()
+            if ('start_date' in kwargs) and (ds.state.expiry_date is None) \
+                    and (pl is not None):
+                ds_query.update_one(set__state__expiry_date=kwargs['start_date'] +
+                                    timedelta(days=pl.retention))
 
             return ApiResponse({
                 'epn': epn,
-                'id': str(ds.first().id)
+                'id': str(ds.id)
             })
         else:
             raise ApiError(
