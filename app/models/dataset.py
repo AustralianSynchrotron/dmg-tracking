@@ -4,11 +4,17 @@ from mongoengine import (ListField, EmbeddedDocumentField, StringField, IntField
 from app import db
 
 
+class Organisation(db.EmbeddedDocument):
+    id = IntField()
+    name = StringField()
+
+
 class PrincipalInvestigator(db.EmbeddedDocument):
     id = IntField()
     first_names = StringField()
     last_name = StringField()
     email = EmailField()
+    org = EmbeddedDocumentField(Organisation, default=Organisation())
 
 
 class Visit(db.EmbeddedDocument):
@@ -16,7 +22,7 @@ class Visit(db.EmbeddedDocument):
     start_date = DateTimeField()
     end_date = DateTimeField()
     type = StringField()
-    pi = EmbeddedDocumentField(PrincipalInvestigator)
+    pi = EmbeddedDocumentField(PrincipalInvestigator, default=PrincipalInvestigator())
 
 
 class Storage(db.EmbeddedDocument):

@@ -40,8 +40,7 @@ def create_dataset(epn, beamline):
     """
     try:
         new_ds = Dataset(epn=epn, beamline=beamline, notes='',
-                         visit=Visit(pi=PrincipalInvestigator()),
-                         storage=[], state=State())
+                         visit=Visit(), storage=[], state=State())
         new_ds.save()
         return ApiResponse({
             'epn': epn,
@@ -107,7 +106,9 @@ def delete_dataset(epn):
     'pi.id': Coerce(int),
     'pi.first_names': str,
     'pi.last_name': str,
-    'pi.email': Email()
+    'pi.email': Email(),
+    'pi.org.id': Coerce(int),
+    'pi.org.name': str,
 }, extra=REMOVE_EXTRA))
 def update_visit(epn, **kwargs):
     try:
