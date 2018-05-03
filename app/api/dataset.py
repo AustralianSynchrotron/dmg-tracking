@@ -4,8 +4,8 @@ from flask import Blueprint
 from voluptuous import Schema, Required, Coerce, Boolean, Email, REMOVE_EXTRA
 from mongoengine.errors import NotUniqueError, InvalidDocumentError
 
-from .utils import sanitize_keys
-from app.models import Dataset, Visit, PrincipalInvestigator, Storage, State, Policy
+from .utils import sanitize_keys, convert_dict_to_update
+from app.models import Dataset, Visit, Storage, State, Policy
 from toolset.decorators import dataschema, DateField
 from toolset import ApiResponse, ApiError, StatusCode
 
@@ -17,7 +17,7 @@ api = Blueprint('dataset', __name__, url_prefix='/dataset')
 @dataschema(Schema({
     Required('epn'): str,
     Required('beamline'): str
-}, extra=REMOVE_EXTRA))
+}, extra=REMOVE_EXTRA), format='json')
 def create_dataset(epn, beamline):
     """
     Create a new, empty dataset for an EPN and a beamline.
@@ -56,10 +56,14 @@ def create_dataset(epn, beamline):
 @dataschema(Schema({
     'epn': str,
     'beamline': str,
-    'visit.pi.email': Email()
+    'pi_email': Email()
 }, extra=REMOVE_EXTRA))
 def search_dataset(**kwargs):
-    query = {sanitize_keys(k): v for k, v in kwargs.items()}
+    params_map = {
+        'pi_email': 'visit.pi.email'
+    }
+
+    query = {sanitize_keys(params_map.get(k, k)): v for k, v in kwargs.items()}
     ds = Dataset.objects(**query)
     if ds is not None:
         return ApiResponse({'datasets': json.loads(ds.to_json())})
@@ -103,24 +107,23 @@ def delete_dataset(epn):
     'start_date': DateField(),
     'end_date': DateField(),
     'type': str,
-    'pi.id': Coerce(int),
-    'pi.first_names': str,
-    'pi.last_name': str,
-    'pi.email': Email(),
-    'pi.org.id': Coerce(int),
-    'pi.org.name': str,
-}, extra=REMOVE_EXTRA))
+    'pi': {
+        'id': Coerce(int),
+        'first_names': str,
+        'last_name': str,
+        'email': Email(),
+        'org': {
+            'id': Coerce(int),
+            'name': str
+        }
+    }
+}, extra=REMOVE_EXTRA), format='json')
 def update_visit(epn, **kwargs):
     try:
         ds_query = Dataset.objects(epn=epn)
         ds = ds_query.first()
         if ds is not None:
-
-            # update the visit information
-            update_dict = {
-                'set__visit__' + sanitize_keys(k): v for k, v in kwargs.items()
-            }
-            ds_query.update_one(**update_dict)
+            ds_query.update_one(**convert_dict_to_update(kwargs, root='visit'))
 
             # if the visit start date is being set and the expiry date
             # hasn't been set yet, set it based on the beamline policy
@@ -154,7 +157,7 @@ def update_visit(epn, **kwargs):
     Required('size_error'): str,
     Required('count'): Coerce(int),
     Required('count_error'): str
-}, extra=REMOVE_EXTRA))
+}, extra=REMOVE_EXTRA), format='json')
 def add_storage(epn, **kwargs):
     try:
         ds = Dataset.objects(epn=epn).first()
@@ -186,7 +189,7 @@ def add_storage(epn, **kwargs):
     'size_error': str,
     'count': Coerce(int),
     'count_error': str
-}, extra=REMOVE_EXTRA))
+}, extra=REMOVE_EXTRA), format='json')
 def update_storage(epn, index, **kwargs):
     try:
         ds = Dataset.objects(epn=epn)
@@ -197,12 +200,8 @@ def update_storage(epn, index, **kwargs):
                     'The storage index {} is not valid'.format(index))
 
             kwargs['last_modified'] = datetime.now()
-
-            update_dict = {
-                'set__storage__{}__{}'.format(index, sanitize_keys(k)):
-                    v for k, v in kwargs.items()
-            }
-            ds.update_one(**update_dict)
+            ds.update_one(**convert_dict_to_update(kwargs,
+                                                   root='storage__{}'.format(index)))
 
             return ApiResponse({
                 'epn': epn,
