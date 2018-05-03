@@ -3,7 +3,7 @@ from flask import Blueprint
 from voluptuous import Schema, Required, Coerce, REMOVE_EXTRA
 from mongoengine.errors import NotUniqueError, InvalidDocumentError
 
-from .utils import sanitize_keys
+from .utils import sanitize_keys, convert_dict_to_update
 from app.models import Policy
 from toolset.decorators import dataschema
 from toolset import ApiResponse, ApiError, StatusCode
@@ -18,7 +18,7 @@ api = Blueprint('policy', __name__, url_prefix='/policy')
     Required('retention'): Coerce(int),
     Required('quota'): Coerce(int),
     'notes': str
-}, extra=REMOVE_EXTRA))
+}, extra=REMOVE_EXTRA), format='json')
 def create_policy(beamline, **kwargs):
     try:
         new_pl = Policy(beamline=beamline, **kwargs)
@@ -53,13 +53,12 @@ def retrieve_policy(beamline):
     'retention': Coerce(int),
     'quota': Coerce(int),
     'notes': str
-}, extra=REMOVE_EXTRA))
+}, extra=REMOVE_EXTRA), format='json')
 def update_policy(beamline, **kwargs):
     try:
         pl = Policy.objects(beamline=beamline)
         if pl.first() is not None:
-            update_dict = {'set__' + sanitize_keys(k): v for k, v in kwargs.items()}
-            pl.update_one(**update_dict)
+            pl.update_one(**convert_dict_to_update(kwargs))
 
             return ApiResponse({
                 'beamline': beamline,
