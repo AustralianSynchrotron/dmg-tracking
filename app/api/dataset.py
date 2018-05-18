@@ -1,12 +1,15 @@
-import json
+from pytz import timezone
+from flask import Blueprint, current_app
 from datetime import datetime, timedelta
-from flask import Blueprint
+from portalapi import Authentication, PortalAPI
+from portalapi.exceptions import AuthenticationFailed, RequestFailed
 from voluptuous import Schema, Required, Coerce, Boolean, Email, REMOVE_EXTRA
 from mongoengine.errors import NotUniqueError, InvalidDocumentError
 
 from .utils import sanitize_keys, convert_dict_to_update
-from app.models import Dataset, Visit, Storage, State, Policy
-from toolset.decorators import dataschema, DateField
+from app.models import (Dataset, Visit, VisitType, PrincipalInvestigator,
+                        Organisation, Storage, State, Policy)
+from toolset.decorators import dataschema
 from toolset import ApiResponse, ApiError, StatusCode
 
 
@@ -15,19 +18,17 @@ api = Blueprint('dataset', __name__, url_prefix='/dataset')
 
 @api.route('', methods=['POST'])
 @dataschema(Schema({
-    Required('epn'): str,
-    Required('beamline'): str
+    Required('epn'): str
 }, extra=REMOVE_EXTRA), format='json')
-def create_dataset(epn, beamline):
+def create_dataset(epn):
     """
-    Create a new, empty dataset for an EPN and a beamline.
+    Create a new, dataset for an EPN and a beamline.
+
+    The visit information is being retrieved from the User Portal API.
+
     ---
     parameters:
       - name: epn
-        in: query
-        type: string
-        required: true
-      - name: beamline
         in: query
         type: string
         required: true
@@ -39,13 +40,15 @@ def create_dataset(epn, beamline):
           id: 5ae30aa3aaaa2f4d8096f575
     """
     try:
-        new_ds = Dataset(epn=epn, beamline=beamline, notes='',
-                         visit=Visit(), storage=[], state=State())
+        new_ds = Dataset(epn=epn, notes='',
+                         visit=_get_visit_from_portal(epn),
+                         storage=[], state=State())
         new_ds.save()
         return ApiResponse({
+            'id': str(new_ds.id),
             'epn': epn,
-            'beamline': beamline,
-            'id': str(new_ds.id)
+            'beamline': new_ds.visit.beamline,
+            'pi': '{} {}'.format(new_ds.visit.pi.first_names, new_ds.visit.pi.last_name)
         })
     except NotUniqueError:
         raise ApiError(StatusCode.BadRequest,
@@ -56,17 +59,18 @@ def create_dataset(epn, beamline):
 @dataschema(Schema({
     'epn': str,
     'beamline': str,
-    'pi_email': Email()
+    'email': Email()
 }, extra=REMOVE_EXTRA))
-def search_dataset(**kwargs):
+def search_datasets(**kwargs):
     params_map = {
-        'pi_email': 'visit.pi.email'
+        'beamline': 'visit.beamline',
+        'email': 'visit.pi.email'
     }
 
     query = {sanitize_keys(params_map.get(k, k)): v for k, v in kwargs.items()}
     ds = Dataset.objects(**query)
     if ds is not None:
-        return ApiResponse({'datasets': json.loads(ds.to_json())})
+        return ApiResponse({'datasets': [_build_dataset_response(d) for d in ds]})
     else:
         raise ApiError(
             StatusCode.InternalServerError,
@@ -78,7 +82,9 @@ def retrieve_dataset(epn):
     try:
         ds = Dataset.objects(epn=epn).first()
         if ds is not None:
-            return ApiResponse(json.loads(ds.to_json()))
+            # hand craft the response message in order to decouple the internal database
+            # design from the interface
+            return ApiResponse(_build_dataset_response(ds))
         else:
             raise ApiError(
                 StatusCode.InternalServerError,
@@ -102,40 +108,19 @@ def delete_dataset(epn):
 
 
 @api.route('/<epn>/visit', methods=['PUT'])
-@dataschema(Schema({
-    'id': Coerce(int),
-    'start_date': DateField(),
-    'end_date': DateField(),
-    'type': str,
-    'pi': {
-        'id': Coerce(int),
-        'first_names': str,
-        'last_name': str,
-        'email': Email(),
-        'org': {
-            'id': Coerce(int),
-            'name': str
-        }
-    }
-}, extra=REMOVE_EXTRA), format='json')
-def update_visit(epn, **kwargs):
+def update_visit(epn):
     try:
-        ds_query = Dataset.objects(epn=epn)
-        ds = ds_query.first()
+        ds = Dataset.objects(epn=epn).first()
         if ds is not None:
-            ds_query.update_one(**convert_dict_to_update(kwargs, root='visit'))
-
-            # if the visit start date is being set and the expiry date
-            # hasn't been set yet, set it based on the beamline policy
-            pl = Policy.objects(beamline=ds.beamline).first()
-            if ('start_date' in kwargs) and (ds.state.expiry_date is None) \
-                    and (pl is not None):
-                ds_query.update_one(set__state__expiry_date=kwargs['start_date'] +
-                                    timedelta(days=pl.retention))
+            ds.visit = _get_visit_from_portal(epn)
+            ds.save()
 
             return ApiResponse({
                 'epn': epn,
-                'id': str(ds.id)
+                'id': str(ds.id),
+                'beamline': ds.visit.beamline,
+                'pi': '{} {}'.format(ds.visit.pi.first_names,
+                                     ds.visit.pi.last_name)
             })
         else:
             raise ApiError(
@@ -162,7 +147,10 @@ def add_storage(epn, **kwargs):
     try:
         ds = Dataset.objects(epn=epn).first()
         if ds is not None:
-            ds.storage.append(Storage(last_modified=datetime.now(), **kwargs))
+            ds.storage.append(
+                Storage(last_modified=datetime.now(tz=current_app.config['TIMEZONE']),
+                        **kwargs)
+            )
             ds.save()
             return ApiResponse({
                 'epn': epn,
@@ -199,7 +187,7 @@ def update_storage(epn, index, **kwargs):
                     StatusCode.InternalServerError,
                     'The storage index {} is not valid'.format(index))
 
-            kwargs['last_modified'] = datetime.now()
+            kwargs['last_modified'] = datetime.now(tz=current_app.config['TIMEZONE'])
             ds.update_one(**convert_dict_to_update(kwargs,
                                                    root='storage__{}'.format(index)))
 
@@ -215,3 +203,88 @@ def update_storage(epn, index, **kwargs):
         raise ApiError(
             StatusCode.InternalServerError,
             'The dataset for EPN {} seems to be damaged'.format(epn))
+
+
+def _get_visit_from_portal(epn):
+    """ Get the visit information from the User Portal and return a MongoDB visit object.
+
+    :return:
+    """
+    try:
+        auth = Authentication(
+            client_name=current_app.config['PORTAL_SETTINGS']['client'],
+            client_password=current_app.config['PORTAL_SETTINGS']['password'],
+            url=current_app.config['PORTAL_SETTINGS']['host']
+        )
+        auth.login()
+    except AuthenticationFailed as e:
+        raise ApiError(StatusCode.BadRequest,
+                       'Could not connect to the User Portal: {}'.format(e))
+
+    # get visit information for the specified EPN
+    api = PortalAPI(auth)
+
+    try:
+        vp = api.get_visit(epn, is_epn=True)
+        equipment = api.get_equipment(vp.equipment_id)
+
+    except RequestFailed as e:
+        raise ApiError(StatusCode.BadRequest,
+                       'An error occurred when contacting the User Portal: {}'.format(e))
+
+    # create a MongoDB Engine Visit object
+    return Visit(
+        id=vp.id,
+        start_date=vp.start_time,
+        end_date=vp.end_time,
+        title=vp.proposal.title,
+        beamline=equipment.name_short,
+        type=VisitType(
+            id=vp.proposal.type.id,
+            name_short=vp.proposal.type.name_short,
+            name_long=vp.proposal.type.name_long
+        ),
+        pi=PrincipalInvestigator(
+            id=vp.principal_scientist.id,
+            first_names=vp.principal_scientist.first_names,
+            last_name=vp.principal_scientist.last_name,
+            email=vp.principal_scientist.email,
+            org=Organisation(
+                id=vp.principal_scientist.organisation.id,
+                name_short=vp.principal_scientist.organisation.name_short,
+                name_long=vp.principal_scientist.organisation.name_long
+            )
+        )
+    )
+
+
+def _build_dataset_response(dataset):
+    return {
+        'epn': dataset.epn,
+        'beamline': dataset.visit.beamline,
+        'type': dataset.visit.type.name_short,
+        'email': dataset.visit.pi.email,
+        'org': dataset.visit.pi.org.name_short,
+        'notes': dataset.notes,
+        'visit': {
+            'id': dataset.visit.id,
+            'start_date': dataset.visit.start_date.replace(tzinfo=timezone('UTC'))
+                           .astimezone(current_app.config['TIMEZONE']).isoformat(),
+            'end_date': dataset.visit.end_date.replace(tzinfo=timezone('UTC'))
+                           .astimezone(current_app.config['TIMEZONE']).isoformat(),
+            'title': dataset.visit.title,
+            'type': {
+                'id': dataset.visit.type.id,
+                'name': dataset.visit.type.name_long
+            },
+            'pi': {
+                'id': dataset.visit.pi.id,
+                'first_names': dataset.visit.pi.first_names,
+                'last_name': dataset.visit.pi.last_name,
+                'org': {
+                    'id': dataset.visit.pi.org.id,
+                    'name': dataset.visit.pi.org.name_long
+                }
+            }
+        }
+    }

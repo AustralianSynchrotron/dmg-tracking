@@ -3,7 +3,7 @@ from flask import Blueprint
 from voluptuous import Schema, Required, Coerce, REMOVE_EXTRA
 from mongoengine.errors import NotUniqueError, InvalidDocumentError
 
-from .utils import sanitize_keys, convert_dict_to_update
+from .utils import convert_dict_to_update
 from app.models import Policy
 from toolset.decorators import dataschema
 from toolset import ApiResponse, ApiError, StatusCode

@@ -6,7 +6,8 @@ from app import db
 
 class Organisation(db.EmbeddedDocument):
     id = IntField()
-    name = StringField()
+    name_short = StringField()
+    name_long = StringField()
 
 
 class PrincipalInvestigator(db.EmbeddedDocument):
@@ -17,11 +18,19 @@ class PrincipalInvestigator(db.EmbeddedDocument):
     org = EmbeddedDocumentField(Organisation, default=Organisation())
 
 
+class VisitType(db.EmbeddedDocument):
+    id = IntField()
+    name_short = StringField()
+    name_long = StringField()
+
+
 class Visit(db.EmbeddedDocument):
     id = IntField()
     start_date = DateTimeField()
     end_date = DateTimeField()
-    type = StringField()
+    title = StringField()
+    beamline = StringField()
+    type = EmbeddedDocumentField(VisitType, default=VisitType())
     pi = EmbeddedDocumentField(PrincipalInvestigator, default=PrincipalInvestigator())
 
 
@@ -37,14 +46,22 @@ class Storage(db.EmbeddedDocument):
     count_error = StringField()
 
 
+class Event(db.EmbeddedDocument):
+    type = StringField()
+    date = DateTimeField()
+    user_id = IntField()
+    user_name = StringField()
+    comments = StringField()
+
+
 class State(db.EmbeddedDocument):
     expiry_date = DateTimeField()
-    reason = StringField()
+    to_delete = BooleanField()
+    history = ListField(EmbeddedDocumentField(Event))
 
 
 class Dataset(db.Document):
     epn = StringField(required=True, unique=True)
-    beamline = StringField(required=True)
     notes = StringField()
     visit = EmbeddedDocumentField(Visit)
     storage = ListField(EmbeddedDocumentField(Storage))
