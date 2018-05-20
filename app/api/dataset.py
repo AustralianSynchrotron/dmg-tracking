@@ -3,12 +3,12 @@ from flask import Blueprint, current_app
 from datetime import datetime, timedelta
 from portalapi import Authentication, PortalAPI
 from portalapi.exceptions import AuthenticationFailed, RequestFailed
-from voluptuous import Schema, Required, Coerce, Boolean, Email, REMOVE_EXTRA
+from voluptuous import Schema, Required, Coerce, Any, Boolean, Email, REMOVE_EXTRA
 from mongoengine.errors import NotUniqueError, InvalidDocumentError
 
 from .utils import sanitize_keys, convert_dict_to_update
 from app.models import (Dataset, Visit, VisitType, PrincipalInvestigator,
-                        Organisation, Storage, State, Policy)
+                        Organisation, StorageEvent, LifecycleEvent, Policy)
 from toolset.decorators import dataschema
 from toolset import ApiResponse, ApiError, StatusCode
 
@@ -16,6 +16,9 @@ from toolset import ApiResponse, ApiError, StatusCode
 api = Blueprint('dataset', __name__, url_prefix='/dataset')
 
 
+# ---------------------------------------------------------------------------------------------------------------------
+#                                                 Dataset API
+# ---------------------------------------------------------------------------------------------------------------------
 @api.route('', methods=['POST'])
 @dataschema(Schema({
     Required('epn'): str
@@ -134,28 +137,28 @@ def update_visit(epn):
 
 @api.route('/<epn>/storage', methods=['POST'])
 @dataschema(Schema({
-    Required('available'): Boolean(),
     Required('name'): str,
     Required('host'): str,
     Required('path'): str,
     Required('size'): Coerce(int),
-    Required('size_error'): str,
     Required('count'): Coerce(int),
-    Required('count_error'): str
+    Required('error'): str
 }, extra=REMOVE_EXTRA), format='json')
-def add_storage(epn, **kwargs):
+def add_storage_event(epn, name, **kwargs):
     try:
         ds = Dataset.objects(epn=epn).first()
         if ds is not None:
-            ds.storage.append(
-                Storage(last_modified=datetime.now(tz=current_app.config['TIMEZONE']),
-                        **kwargs)
+            if name not in ds.storage:
+                ds.storage[name] = []
+
+            ds.storage[name].append(
+                StorageEvent(created_at=datetime.now(tz=current_app.config['TIMEZONE']), **kwargs)
             )
             ds.save()
+
             return ApiResponse({
                 'epn': epn,
-                'id': str(ds.id),
-                'index': len(ds.storage) - 1
+                'id': str(ds.id)
             })
         else:
             raise ApiError(
@@ -167,33 +170,38 @@ def add_storage(epn, **kwargs):
             'The dataset for EPN {} seems to be damaged'.format(epn))
 
 
-@api.route('/<epn>/storage/<int:index>', methods=['PUT'])
+@api.route('/<epn>/storage', methods=['GET'])
+def retrieve_storage_details(epn):
+    """ Retrieve all storage entries with their full history"""
+    pass
+
+
+@api.route('/<epn>/storage/last', methods=['GET'])
+def retrieve_storage_last(epn):
+    """ Retrieve all storage entries with their most recent history entry"""
+    pass
+
+
+@api.route('/<epn>/lifecycle', methods=['POST'])
 @dataschema(Schema({
-    'available': Boolean(),
-    'name': str,
-    'host': str,
-    'path': str,
-    'size': Coerce(int),
-    'size_error': str,
-    'count': Coerce(int),
-    'count_error': str
+    Required('type'): Any('normal', 'expired', 'renewed', 'deleted'), # build schema in which renewed requires an extension time in days and if not given uses policy
+    Required('user_id'): Coerce(int),
+    Required('user_name'): str,
+    Required('notes'): str
 }, extra=REMOVE_EXTRA), format='json')
-def update_storage(epn, index, **kwargs):
+def add_lifecycle_event(epn, name, **kwargs):
     try:
-        ds = Dataset.objects(epn=epn)
-        if ds.first() is not None:
-            if (index < 0) or (index >= len(ds.first().storage)):
-                raise ApiError(
-                    StatusCode.InternalServerError,
-                    'The storage index {} is not valid'.format(index))
-
-            kwargs['last_modified'] = datetime.now(tz=current_app.config['TIMEZONE'])
-            ds.update_one(**convert_dict_to_update(kwargs,
-                                                   root='storage__{}'.format(index)))
+        ds = Dataset.objects(epn=epn).first()
+        if ds is not None:
+            ds.lifecycle.append(
+                LifecycleEvent(created_at=datetime.now(tz=current_app.config['TIMEZONE']),
+                               **kwargs)
+            )
+            ds.save()
 
             return ApiResponse({
                 'epn': epn,
-                'id': str(ds.first().id)
+                'id': str(ds.id)
             })
         else:
             raise ApiError(
@@ -205,6 +213,21 @@ def update_storage(epn, index, **kwargs):
             'The dataset for EPN {} seems to be damaged'.format(epn))
 
 
+@api.route('/<epn>/lifecycle', methods=['GET'])
+def retrieve_lifecycle_details(epn):
+    """ Retrieve all lifecycle events"""
+    pass
+
+
+@api.route('/<epn>/lifecycle/last', methods=['GET'])
+def retrieve_lifecycle_last(epn):
+    """ Retrieve most recent lifecycle event"""
+    pass
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+#                                             Private Functions
+# ---------------------------------------------------------------------------------------------------------------------
 def _get_visit_from_portal(epn):
     """ Get the visit information from the User Portal and return a MongoDB visit object.
 
@@ -259,19 +282,56 @@ def _get_visit_from_portal(epn):
 
 
 def _build_dataset_response(dataset):
+    # build the dictionary for all named storage items with their most recent history entry
+    storage_dict = {}
+    for name, event in dataset.storage.items():
+        last_event = event[-1]
+        storage_dict[name] = {
+            'available': (last_event.size is not None) and (last_event.count is not None) and
+                         ((not last_event.error) or (last_event.error is not None)),
+            'host': last_event.host,
+            'path': last_event.path,
+            'size': last_event.size,
+            'count': last_event.count,
+            'error': last_event.error
+        }
+
+    # build the dictionary for the most recent lifecycle event
+    if len(dataset.lifecycle) > 0:
+        last_event = dataset.lifecycle[-1]
+        lifecycle_dict = {
+            'type': last_event.type,
+            'expires_on': last_event.expires_on.replace(tzinfo=timezone('UTC'))
+                          .astimezone(current_app.config['TIMEZONE']).isoformat(),
+            'user_id': last_event.user_id,
+            'user_name': last_event.user_name,
+            'notes': last_event.notes
+        }
+    else:
+        lifecycle_dict = {}
+
     return {
         'epn': dataset.epn,
         'beamline': dataset.visit.beamline,
+
+        #'state': state of most recent lifecycle item
+        #'expires_on': of most recent lifecycle item
+
+        #'available': all storage items must be available
+        #'size': total size of all storage items
+        #'count': total size of all storage items
+
         'type': dataset.visit.type.name_short,
         'email': dataset.visit.pi.email,
         'org': dataset.visit.pi.org.name_short,
+
         'notes': dataset.notes,
         'visit': {
             'id': dataset.visit.id,
-            'start_date': dataset.visit.start_date.replace(tzinfo=timezone('UTC'))
-                           .astimezone(current_app.config['TIMEZONE']).isoformat(),
-            'end_date': dataset.visit.end_date.replace(tzinfo=timezone('UTC'))
-                           .astimezone(current_app.config['TIMEZONE']).isoformat(),
+            'start': dataset.visit.start_date.replace(tzinfo=timezone('UTC'))
+                     .astimezone(current_app.config['TIMEZONE']).isoformat(),
+            'end': dataset.visit.end_date.replace(tzinfo=timezone('UTC'))
+                   .astimezone(current_app.config['TIMEZONE']).isoformat(),
             'title': dataset.visit.title,
             'type': {
                 'id': dataset.visit.type.id,

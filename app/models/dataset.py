@@ -1,4 +1,4 @@
-from mongoengine import (ListField, EmbeddedDocumentField, StringField, IntField,
+from mongoengine import (EmbeddedDocumentField, ListField, MapField, StringField, IntField,
                          BooleanField, DateTimeField, EmailField)
 
 from app import db
@@ -34,35 +34,27 @@ class Visit(db.EmbeddedDocument):
     pi = EmbeddedDocumentField(PrincipalInvestigator, default=PrincipalInvestigator())
 
 
-class Storage(db.EmbeddedDocument):
-    last_modified = DateTimeField()
-    available = BooleanField()
-    name = StringField()
+class StorageEvent(db.EmbeddedDocument):
+    created_at = DateTimeField()
     host = StringField()
     path = StringField()
     size = IntField()
-    size_error = StringField()
     count = IntField()
-    count_error = StringField()
+    error = StringField()
 
 
-class Event(db.EmbeddedDocument):
+class LifecycleEvent(db.EmbeddedDocument):
     type = StringField()
-    date = DateTimeField()
+    created_at = DateTimeField()
+    expires_on = DateTimeField()
     user_id = IntField()
     user_name = StringField()
-    comments = StringField()
-
-
-class State(db.EmbeddedDocument):
-    expiry_date = DateTimeField()
-    to_delete = BooleanField()
-    history = ListField(EmbeddedDocumentField(Event))
+    notes = StringField()
 
 
 class Dataset(db.Document):
     epn = StringField(required=True, unique=True)
     notes = StringField()
     visit = EmbeddedDocumentField(Visit)
-    storage = ListField(EmbeddedDocumentField(Storage))
-    state = EmbeddedDocumentField(State)
+    storage = MapField(ListField(EmbeddedDocumentField(StorageEvent)))  # map the name of a storage to a list of events
+    lifecycle = ListField(EmbeddedDocumentField(LifecycleEvent))
