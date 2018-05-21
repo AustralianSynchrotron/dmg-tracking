@@ -1,14 +1,14 @@
-from pytz import timezone
 from flask import Blueprint, current_app
 from datetime import datetime, timedelta
 from portalapi import Authentication, PortalAPI
 from portalapi.exceptions import AuthenticationFailed, RequestFailed
-from voluptuous import Schema, Required, Coerce, Any, Boolean, Email, REMOVE_EXTRA
+from voluptuous import Schema, Required, Optional, Coerce, Email, REMOVE_EXTRA
 from mongoengine.errors import NotUniqueError, InvalidDocumentError
 
-from .utils import sanitize_keys, convert_dict_to_update
+from .utils import sanitize_keys, utc_to_local
+from .const import LifecycleStateType
 from app.models import (Dataset, Visit, VisitType, PrincipalInvestigator,
-                        Organisation, StorageEvent, LifecycleEvent, Policy)
+                        Organisation, StorageEvent, LifecycleState, Policy)
 from toolset.decorators import dataschema
 from toolset import ApiResponse, ApiError, StatusCode
 
@@ -43,9 +43,25 @@ def create_dataset(epn):
           id: 5ae30aa3aaaa2f4d8096f575
     """
     try:
+        visit = _get_visit_from_portal(epn)
+        pl = Policy.objects(beamline=visit.beamline).first()
+
+        if pl is None:
+            raise ApiError(
+                StatusCode.InternalServerError,
+                'A policy for the {} beamline does not exist'.format(visit.beamline))
+
         new_ds = Dataset(epn=epn, notes='',
-                         visit=_get_visit_from_portal(epn),
-                         storage=[], state=State())
+                         visit=visit,
+                         storage={},
+                         lifecycle=[LifecycleState(
+                             type=LifecycleStateType.NORMAL,
+                             created_at=datetime.now(tz=current_app.config['TIMEZONE']),
+                             expires_on=visit.start_date + timedelta(days=pl.retention),
+                             user_id=None,
+                             user_name='auto',
+                             notes='auto generated during dataset creation')
+                         ])
         new_ds.save()
         return ApiResponse({
             'id': str(new_ds.id),
@@ -110,6 +126,9 @@ def delete_dataset(epn):
             'Dataset with EPN {} does not exist'.format(epn))
 
 
+# ---------------------------------------------------------------------------------------------------------------------
+#                                                 Visit API
+# ---------------------------------------------------------------------------------------------------------------------
 @api.route('/<epn>/visit', methods=['PUT'])
 def update_visit(epn):
     try:
@@ -135,6 +154,9 @@ def update_visit(epn):
             'The dataset for EPN {} seems to be damaged'.format(epn))
 
 
+# ---------------------------------------------------------------------------------------------------------------------
+#                                                 Storage API
+# ---------------------------------------------------------------------------------------------------------------------
 @api.route('/<epn>/storage', methods=['POST'])
 @dataschema(Schema({
     Required('name'): str,
@@ -142,7 +164,7 @@ def update_visit(epn):
     Required('path'): str,
     Required('size'): Coerce(int),
     Required('count'): Coerce(int),
-    Required('error'): str
+    Optional('error', default=''): str
 }, extra=REMOVE_EXTRA), format='json')
 def add_storage_event(epn, name, **kwargs):
     try:
@@ -152,7 +174,8 @@ def add_storage_event(epn, name, **kwargs):
                 ds.storage[name] = []
 
             ds.storage[name].append(
-                StorageEvent(created_at=datetime.now(tz=current_app.config['TIMEZONE']), **kwargs)
+                StorageEvent(created_at=datetime.now(tz=current_app.config['TIMEZONE']),
+                             **kwargs)
             )
             ds.save()
 
@@ -173,29 +196,94 @@ def add_storage_event(epn, name, **kwargs):
 @api.route('/<epn>/storage', methods=['GET'])
 def retrieve_storage_details(epn):
     """ Retrieve all storage entries with their full history"""
-    pass
+    try:
+        ds = Dataset.objects(epn=epn).first()
+        if ds is not None:
+            response = {}
+            for name, events in ds.storage.items():
+                response[name] = [_build_storage_event_response(e) for e in events]
+
+            return ApiResponse({'storage': response})
+        else:
+            raise ApiError(
+                StatusCode.InternalServerError,
+                'Dataset with EPN {} does not exist'.format(epn))
+
+    except InvalidDocumentError:
+        raise ApiError(
+            StatusCode.InternalServerError,
+            'The dataset for EPN {} seems to be damaged'.format(epn))
 
 
 @api.route('/<epn>/storage/last', methods=['GET'])
 def retrieve_storage_last(epn):
     """ Retrieve all storage entries with their most recent history entry"""
-    pass
+    try:
+        ds = Dataset.objects(epn=epn).first()
+        if ds is not None:
+            response = {}
+            for name, events in ds.storage.items():
+                response[name] = _build_storage_event_response(events[-1])\
+                    if len(events) > 0 else {}
+
+            return ApiResponse({'storage': response})
+        else:
+            raise ApiError(
+                StatusCode.InternalServerError,
+                'Dataset with EPN {} does not exist'.format(epn))
+
+    except InvalidDocumentError:
+        raise ApiError(
+            StatusCode.InternalServerError,
+            'The dataset for EPN {} seems to be damaged'.format(epn))
 
 
+# ---------------------------------------------------------------------------------------------------------------------
+#                                                 Lifecycle API
+# ---------------------------------------------------------------------------------------------------------------------
 @api.route('/<epn>/lifecycle', methods=['POST'])
 @dataschema(Schema({
-    Required('type'): Any('normal', 'expired', 'renewed', 'deleted'), # build schema in which renewed requires an extension time in days and if not given uses policy
+    Optional('days', default=-1): Coerce(int),
     Required('user_id'): Coerce(int),
     Required('user_name'): str,
     Required('notes'): str
 }, extra=REMOVE_EXTRA), format='json')
-def add_lifecycle_event(epn, name, **kwargs):
+def add_lifecycle_renew_state(epn, days, **kwargs):
     try:
         ds = Dataset.objects(epn=epn).first()
         if ds is not None:
+
+            # check that the dataset is in a state in which it can be renewed
+            if len(ds.lifecycle) == 0:
+                raise ApiError(
+                    StatusCode.InternalServerError,
+                    'Cannot renew a dataset that has no lifecycle state yet')
+
+            current_state = ds.lifecycle[-1]
+            if current_state.type not in [LifecycleStateType.NORMAL,
+                                          LifecycleStateType.EXPIRED,
+                                          LifecycleStateType.RENEWED]:
+                raise ApiError(
+                    StatusCode.InternalServerError,
+                    'The dataset is in the wrong state and cannot be renewed')
+
+            # if a number of days was not provided, extend expiry date by the policy
+            if days < 0:
+                pl = Policy.objects(beamline=ds.visit.beamline).first()
+                if pl is None:
+                    raise ApiError(
+                        StatusCode.InternalServerError,
+                        'A policy for the {} beamline does not exist'.format(
+                            ds.visit.beamline))
+                days = pl.retention
+
             ds.lifecycle.append(
-                LifecycleEvent(created_at=datetime.now(tz=current_app.config['TIMEZONE']),
-                               **kwargs)
+                LifecycleState(
+                    type=LifecycleStateType.RENEWED,
+                    created_at=datetime.now(tz=current_app.config['TIMEZONE']),
+                    expires_on=utc_to_local(current_state.expires_on) +
+                               timedelta(days=days),
+                    **kwargs)
             )
             ds.save()
 
@@ -213,16 +301,135 @@ def add_lifecycle_event(epn, name, **kwargs):
             'The dataset for EPN {} seems to be damaged'.format(epn))
 
 
+@api.route('/<epn>/lifecycle', methods=['DELETE'])
+@dataschema(Schema({
+    Required('user_id'): Coerce(int),
+    Required('user_name'): str,
+    Optional('notes', default=''): str
+}, extra=REMOVE_EXTRA), format='json')
+def add_lifecycle_delete_state(epn, **kwargs):
+    try:
+        ds = Dataset.objects(epn=epn).first()
+        if ds is not None:
+            if len(ds.lifecycle) > 0:
+                current_state = ds.lifecycle[-1]
+            else:
+                current_state = None
+
+            # check that the dataset is in a state in which it can be deleted
+            if (current_state is not None) and\
+                    (current_state.type == LifecycleStateType.DELETED):
+                raise ApiError(
+                    StatusCode.InternalServerError,
+                    'The dataset has already been marked as deleted')
+
+            ds.lifecycle.append(
+                LifecycleState(
+                    type=LifecycleStateType.DELETED,
+                    created_at=datetime.now(tz=current_app.config['TIMEZONE']),
+                    expires_on=None,
+                    **kwargs)
+            )
+            ds.save()
+
+            return ApiResponse({
+                'epn': epn,
+                'id': str(ds.id)
+            })
+        else:
+            raise ApiError(
+                StatusCode.InternalServerError,
+                'Dataset with EPN {} does not exist'.format(epn))
+    except InvalidDocumentError:
+        raise ApiError(
+            StatusCode.InternalServerError,
+            'The dataset for EPN {} seems to be damaged'.format(epn))
+
+
+@api.route('/<epn>/lifecycle', methods=['PUT'])
+def update_lifecycle_expiry_state(epn):
+    try:
+        ds = Dataset.objects(epn=epn).first()
+        if ds is not None:
+
+            if len(ds.lifecycle) == 0:
+                raise ApiError(
+                    StatusCode.InternalServerError,
+                    'Cannot renew a dataset that has no lifecycle state yet')
+
+            current_state = ds.lifecycle[-1]
+
+            # check that the dataset is in the correct state
+            if current_state.type in [LifecycleStateType.NORMAL,
+                                      LifecycleStateType.RENEWED]:
+
+                # check whether it has expired
+                if datetime.now(tz=current_app.config['TIMEZONE']) > \
+                        utc_to_local(current_state.expires_on):
+
+                    ds.lifecycle.append(
+                        LifecycleState(
+                            type=LifecycleStateType.EXPIRED,
+                            created_at=datetime.now(tz=current_app.config['TIMEZONE']),
+                            expires_on=utc_to_local(current_state.expires_on),
+                            user_id=None,
+                            user_name='auto',
+                            notes='auto generated during expiry date update')
+                    )
+                    ds.save()
+
+            return ApiResponse({
+                'epn': epn,
+                'id': str(ds.id)
+            })
+        else:
+            raise ApiError(
+                StatusCode.InternalServerError,
+                'Dataset with EPN {} does not exist'.format(epn))
+    except InvalidDocumentError:
+        raise ApiError(
+            StatusCode.InternalServerError,
+            'The dataset for EPN {} seems to be damaged'.format(epn))
+
+
 @api.route('/<epn>/lifecycle', methods=['GET'])
 def retrieve_lifecycle_details(epn):
-    """ Retrieve all lifecycle events"""
-    pass
+    """ Retrieve all lifecycle state"""
+    try:
+        ds = Dataset.objects(epn=epn).first()
+        if ds is not None:
+            return ApiResponse({
+                'lifecycle': [_build_lifecycle_state_response(ls)
+                              for ls in ds.lifecycle][::-1]
+            })
+        else:
+            raise ApiError(
+                StatusCode.InternalServerError,
+                'Dataset with EPN {} does not exist'.format(epn))
+
+    except InvalidDocumentError:
+        raise ApiError(
+            StatusCode.InternalServerError,
+            'The dataset for EPN {} seems to be damaged'.format(epn))
 
 
 @api.route('/<epn>/lifecycle/last', methods=['GET'])
 def retrieve_lifecycle_last(epn):
-    """ Retrieve most recent lifecycle event"""
-    pass
+    """ Retrieve most recent lifecycle state"""
+    try:
+        ds = Dataset.objects(epn=epn).first()
+        if ds is not None:
+            return ApiResponse(_build_lifecycle_state_response(ds.lifecycle[-1])
+                               if len(ds.lifecycle) > 0 else {})
+        else:
+            raise ApiError(
+                StatusCode.InternalServerError,
+                'Dataset with EPN {} does not exist'.format(epn))
+
+    except InvalidDocumentError:
+        raise ApiError(
+            StatusCode.InternalServerError,
+            'The dataset for EPN {} seems to be damaged'.format(epn))
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -282,56 +489,38 @@ def _get_visit_from_portal(epn):
 
 
 def _build_dataset_response(dataset):
-    # build the dictionary for all named storage items with their most recent history entry
-    storage_dict = {}
+    storage_items = []
     for name, event in dataset.storage.items():
         last_event = event[-1]
-        storage_dict[name] = {
-            'available': (last_event.size is not None) and (last_event.count is not None) and
-                         ((not last_event.error) or (last_event.error is not None)),
-            'host': last_event.host,
-            'path': last_event.path,
+        storage_items.append({
+            'available': (last_event.size is not None) and
+                         (last_event.count is not None) and
+                         ((not last_event.error) or
+                          (last_event.error is not None)),
             'size': last_event.size,
             'count': last_event.count,
-            'error': last_event.error
-        }
+        })
 
-    # build the dictionary for the most recent lifecycle event
-    if len(dataset.lifecycle) > 0:
-        last_event = dataset.lifecycle[-1]
-        lifecycle_dict = {
-            'type': last_event.type,
-            'expires_on': last_event.expires_on.replace(tzinfo=timezone('UTC'))
-                          .astimezone(current_app.config['TIMEZONE']).isoformat(),
-            'user_id': last_event.user_id,
-            'user_name': last_event.user_name,
-            'notes': last_event.notes
-        }
-    else:
-        lifecycle_dict = {}
-
+    last_lifecycle_state = dataset.lifecycle[-1]
     return {
         'epn': dataset.epn,
         'beamline': dataset.visit.beamline,
-
-        #'state': state of most recent lifecycle item
-        #'expires_on': of most recent lifecycle item
-
-        #'available': all storage items must be available
-        #'size': total size of all storage items
-        #'count': total size of all storage items
-
+        'state': last_lifecycle_state.type,
+        'expires_on': utc_to_local(last_lifecycle_state.expires_on).isoformat()
+                      if last_lifecycle_state.expires_on is not None else None,
+        'available':
+            all([item['available'] for item in storage_items])
+            if len(storage_items) > 0 else False,
+        'size': sum([item['size'] for item in storage_items]),
+        'count': sum([item['count'] for item in storage_items]),
         'type': dataset.visit.type.name_short,
         'email': dataset.visit.pi.email,
         'org': dataset.visit.pi.org.name_short,
-
         'notes': dataset.notes,
         'visit': {
             'id': dataset.visit.id,
-            'start': dataset.visit.start_date.replace(tzinfo=timezone('UTC'))
-                     .astimezone(current_app.config['TIMEZONE']).isoformat(),
-            'end': dataset.visit.end_date.replace(tzinfo=timezone('UTC'))
-                   .astimezone(current_app.config['TIMEZONE']).isoformat(),
+            'start': utc_to_local(dataset.visit.start_date).isoformat(),
+            'end': utc_to_local(dataset.visit.end_date).isoformat(),
             'title': dataset.visit.title,
             'type': {
                 'id': dataset.visit.type.id,
@@ -347,4 +536,27 @@ def _build_dataset_response(dataset):
                 }
             }
         }
+    }
+
+
+def _build_storage_event_response(event):
+    return {
+        'created_at': utc_to_local(event.created_at).isoformat(),
+        'host': event.host,
+        'path': event.path,
+        'size': event.size,
+        'count': event.count,
+        'error': event.error
+    }
+
+
+def _build_lifecycle_state_response(state):
+    return {
+        'type': state.type,
+        'created_at': utc_to_local(state.created_at).isoformat(),
+        'expires_on': utc_to_local(state.expires_on).isoformat()
+                      if state.expires_on is not None else None,
+        'user_id': state.user_id,
+        'user_name': state.user_name,
+        'notes': state.notes
     }

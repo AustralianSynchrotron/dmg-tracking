@@ -1,5 +1,5 @@
-from mongoengine import (EmbeddedDocumentField, ListField, MapField, StringField, IntField,
-                         BooleanField, DateTimeField, EmailField)
+from mongoengine import (EmbeddedDocumentField, ListField, MapField, StringField,
+                         IntField, DateTimeField, EmailField)
 
 from app import db
 
@@ -43,7 +43,7 @@ class StorageEvent(db.EmbeddedDocument):
     error = StringField()
 
 
-class LifecycleEvent(db.EmbeddedDocument):
+class LifecycleState(db.EmbeddedDocument):
     type = StringField()
     created_at = DateTimeField()
     expires_on = DateTimeField()
@@ -56,5 +56,5 @@ class Dataset(db.Document):
     epn = StringField(required=True, unique=True)
     notes = StringField()
     visit = EmbeddedDocumentField(Visit)
-    storage = MapField(ListField(EmbeddedDocumentField(StorageEvent)))  # map the name of a storage to a list of events
-    lifecycle = ListField(EmbeddedDocumentField(LifecycleEvent))
+    storage = MapField(ListField(EmbeddedDocumentField(StorageEvent)))
+    lifecycle = ListField(EmbeddedDocumentField(LifecycleState))

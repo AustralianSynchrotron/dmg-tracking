@@ -1,6 +1,6 @@
 from .dataset import (Dataset, Visit, VisitType, PrincipalInvestigator, Organisation,
-                      StorageEvent, LifecycleEvent)
+                      StorageEvent, LifecycleState)
 from .policy import Policy
 
 __all__ = ['Dataset', 'Visit', 'VisitType', 'PrincipalInvestigator', 'Organisation',
-           'StorageEvent', 'LifecycleEvent', 'Policy']
+           'StorageEvent', 'LifecycleState', 'Policy']

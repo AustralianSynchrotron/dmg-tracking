@@ -1,3 +1,5 @@
+from pytz import timezone
+from flask import current_app
 from mongoengine.queryset.transform import MATCH_OPERATORS
 
 
@@ -26,3 +28,8 @@ def convert_dict_to_update(data_dict, root=None):
             result['set__{}{}'.format(new_root, '__'
                    if key in MATCH_OPERATORS else '')] = value
     return result
+
+
+def utc_to_local(utc_datetime):
+    return utc_datetime.replace(tzinfo=timezone('UTC'))\
+        .astimezone(current_app.config['TIMEZONE'])
