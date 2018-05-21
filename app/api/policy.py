@@ -1,6 +1,5 @@
-import json
 from flask import Blueprint
-from voluptuous import Schema, Required, Coerce, REMOVE_EXTRA
+from voluptuous import Schema, Required, Optional, Coerce, REMOVE_EXTRA
 from mongoengine.errors import NotUniqueError, InvalidDocumentError
 
 from .utils import convert_dict_to_update
@@ -12,12 +11,15 @@ from toolset import ApiResponse, ApiError, StatusCode
 api = Blueprint('policy', __name__, url_prefix='/policy')
 
 
+# ---------------------------------------------------------------------------------------------------------------------
+#                                                 Policy API
+# ---------------------------------------------------------------------------------------------------------------------
 @api.route('', methods=['POST'])
 @dataschema(Schema({
     Required('beamline'): str,
     Required('retention'): Coerce(int),
     Required('quota'): Coerce(int),
-    'notes': str
+    Optional('notes', default=''): str
 }, extra=REMOVE_EXTRA), format='json')
 def create_policy(beamline, **kwargs):
     try:
@@ -37,7 +39,7 @@ def retrieve_policy(beamline):
     try:
         pl = Policy.objects(beamline=beamline).first()
         if pl is not None:
-            return ApiResponse(json.loads(pl.to_json()))
+            return ApiResponse(_build_policy_response(pl))
         else:
             raise ApiError(
                 StatusCode.InternalServerError,
@@ -84,3 +86,15 @@ def delete_policy(beamline):
         raise ApiError(
             StatusCode.InternalServerError,
             'Policy for {} does not exist'.format(beamline))
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+#                                             Private Functions
+# ---------------------------------------------------------------------------------------------------------------------
+def _build_policy_response(policy):
+    return {
+        'beamline': policy.beamline,
+        'retention': policy.retention,
+        'quota': policy.quota,
+        'notes': policy.notes
+    }
