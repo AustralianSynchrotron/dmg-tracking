@@ -6,6 +6,9 @@ from config import Config
 from toolset import StatusCode, ApiError, Service
 
 
+__version__ = '0.1.0'
+
+
 db = MongoEngine()
 swg = Swagger()
 
