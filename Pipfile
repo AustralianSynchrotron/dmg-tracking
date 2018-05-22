@@ -9,25 +9,25 @@ verify_ssl = true
 name = "aspypi"
 
 [packages]
-click = {version=">=6.7", index="pypi}
-flask-mongoengine = {version=">=0.9.5", index="pypi}
-itsdangerous = {version=">=0.24", index="pypi}
-mongoengine = {version=">=0.15.0", index="pypi}
-pymongo = {version=">=3.6.1", index="pypi}
-six = {version=">=1.11.0", index="pypi}
-voluptuous = {version=">=0.11.1", index="pypi}
-flasgger = {version=">=0.8.1", index="pypi}
-python-dotenv = {version=">=0.8.2", index="pypi}
-pytz = {version=">=2018.4", index="pypi}
-tzlocal = {version=">=1.5.1", index="pypi}
-python-dateutil = {version=">=2.7.3", index="pypi}
-portalapi = {version=">=1.3.0", index="pypi}
-Flask = {version=">=1.0", index="pypi}
-Flask-WTF = {version=">=0.14.2", index="pypi}
-"Jinja2" = {version=">=2.10", index="pypi}
-MarkupSafe = {version=">=1.0", index="pypi}
-Werkzeug = {version=">=0.14.1", index="pypi}
-WTForms = {version=">=2.1", index="pypi}
+click = {version=">=6.7", index="pypi"}
+flask-mongoengine = {version=">=0.9.5", index="pypi"}
+itsdangerous = {version=">=0.24", index="pypi"}
+mongoengine = {version=">=0.15.0", index="pypi"}
+pymongo = {version=">=3.6.1", index="pypi"}
+six = {version=">=1.11.0", index="pypi"}
+voluptuous = {version=">=0.11.1", index="pypi"}
+flasgger = {version=">=0.8.1", index="pypi"}
+python-dotenv = {version=">=0.8.2", index="pypi"}
+pytz = {version=">=2018.4", index="pypi"}
+tzlocal = {version=">=1.5.1", index="pypi"}
+python-dateutil = {version=">=2.7.3", index="pypi"}
+portalapi = {version=">=1.3.0", index="pypi"}
+Flask = {version=">=1.0", index="pypi"}
+Flask-WTF = {version=">=0.14.2", index="pypi"}
+"Jinja2" = {version=">=2.10", index="pypi"}
+MarkupSafe = {version=">=1.0", index="pypi"}
+Werkzeug = {version=">=0.14.1", index="pypi"}
+WTForms = {version=">=2.1", index="pypi"}
 portalapi = {version=">=1.3.0", index="aspypi"}
 
 [dev-packages]
