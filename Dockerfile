@@ -9,5 +9,6 @@ RUN pip install -r requirements.txt
 
 # Copy the service code and run it
 ADD . /app
+
 EXPOSE 5000
 CMD ["flask", "run", "--host=0.0.0.0"]
