@@ -2,14 +2,12 @@
 The data management tracking service provides a RESTful service for registration, retrieval and
 tracking of changes for experimental datasets.
 
+
 ## Run the Service
-When running the service in production, it is highly recommended to make use of the Docker image.
-It is available from the local Docker registry and can be run with:
 
-`docker run --rm -d -p 5000:5000 docker.synchrotron.org.au/dmg/dmg-tracking:latest`
-
-If you would like to run the service locally, create a python virtual environment with pipenv and install
-the python packages with:
+#### Local Deployment for Development
+If you would like to run the service locally for development purposes, create a python virtual
+environment with pipenv and install the python packages with:
 
 `pipenv --three install`
 
@@ -40,6 +38,19 @@ Start the service with:
 or with auto-reloading enabled:
 
 `flask run --reload`
+
+You will also need a MongoDB server running on `localhost` listening on the default port `27017`.
+
+#### Production Deployment
+When running the service in production, it is highly recommended to use the provided Docker Compose
+file and the Docker images from the Australian Synchrotron Docker registry. Run the service and the
+database with:
+
+`docker-compose up -d`
+
+Please make sure that you have a `.env` file, as described above, in the same directory as the
+Docker Compose file. Alternatively, set the environment variables with `export`.
+
 
 ## Build the Docker Container
 Docker is the best way to run the data management tracking service. In order to build a Docker image,
