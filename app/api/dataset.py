@@ -1,8 +1,9 @@
 from flask import Blueprint, current_app
 from datetime import datetime, timedelta
+from dateutil import parser
 from portalapi import Authentication, PortalAPI
 from portalapi.exceptions import AuthenticationFailed, RequestFailed
-from voluptuous import Schema, Required, Optional, Coerce, Email, REMOVE_EXTRA
+from voluptuous import Schema, Required, Optional, Coerce, Email, Datetime, REMOVE_EXTRA
 from mongoengine.errors import NotUniqueError, InvalidDocumentError
 
 from .utils import sanitize_keys, utc_to_local
@@ -243,12 +244,13 @@ def retrieve_storage_last(epn):
 # ---------------------------------------------------------------------------------------------------------------------
 @api.route('/<epn>/lifecycle', methods=['POST'])
 @dataschema(Schema({
-    Optional('days', default=-1): Coerce(int),
+    Optional('days'): Coerce(int),
+    Optional('expiry_date'): Datetime(format='%Y-%m-%dT%H:%M:%S'),
     Required('user_id'): Coerce(int),
     Required('user_name'): str,
     Required('notes'): str
 }, extra=REMOVE_EXTRA), format='json')
-def add_lifecycle_renew_state(epn, days, **kwargs):
+def add_lifecycle_renew_state(epn, days=None, expiry_date=None, **kwargs):
     try:
         ds = Dataset.objects(epn=epn).first()
         if ds is not None:
@@ -267,22 +269,29 @@ def add_lifecycle_renew_state(epn, days, **kwargs):
                     StatusCode.InternalServerError,
                     'The dataset is in the wrong state and cannot be renewed')
 
-            # if a number of days was not provided, extend expiry date by the policy
-            if days < 0:
+            # if neither a number of days was provided nor an expiry date,
+            # extend the expiry date by the retention days given in the policy
+            if (days is None) and (expiry_date is None):
                 pl = Policy.objects(beamline=ds.visit.beamline).first()
                 if pl is None:
                     raise ApiError(
                         StatusCode.InternalServerError,
                         'A policy for the {} beamline does not exist'.format(
                             ds.visit.beamline))
-                days = pl.retention
+                expires_on = utc_to_local(current_state.expires_on) +\
+                             timedelta(days=pl.retention)
+            # if a number of days is not given but an expiry date, use the expiry date
+            elif (days is None) and (expiry_date is not None):
+                expires_on = current_app.config['TIMEZONE'].localize(
+                    parser.parse(expiry_date))
+            else:
+                expires_on = utc_to_local(current_state.expires_on) + timedelta(days=days)
 
             ds.lifecycle.append(
                 LifecycleState(
                     type=LifecycleStateType.RENEWED,
                     created_at=datetime.now(tz=current_app.config['TIMEZONE']),
-                    expires_on=utc_to_local(current_state.expires_on) +
-                               timedelta(days=days),
+                    expires_on=expires_on,
                     **kwargs)
             )
             ds.save()
@@ -303,6 +312,7 @@ def add_lifecycle_renew_state(epn, days, **kwargs):
 
 @api.route('/<epn>/lifecycle', methods=['DELETE'])
 @dataschema(Schema({
+
     Required('user_id'): Coerce(int),
     Required('user_name'): str,
     Optional('notes', default=''): str
@@ -505,7 +515,7 @@ def _build_dataset_response(dataset):
     return {
         'epn': dataset.epn,
         'beamline': dataset.visit.beamline,
-        'state': last_lifecycle_state.type,
+        'status': last_lifecycle_state.type,
         'expires_on': utc_to_local(last_lifecycle_state.expires_on).isoformat()
                       if last_lifecycle_state.expires_on is not None else None,
         'available':
@@ -513,27 +523,28 @@ def _build_dataset_response(dataset):
             if len(storage_items) > 0 else False,
         'size': sum([item['size'] for item in storage_items]),
         'count': sum([item['count'] for item in storage_items]),
-        'type': dataset.visit.type.name_short,
-        'email': dataset.visit.pi.email,
-        'org': dataset.visit.pi.org.name_short,
+        'contact': dataset.visit.pi.email,
         'notes': dataset.notes,
         'visit': {
             'id': dataset.visit.id,
             'start': utc_to_local(dataset.visit.start_date).isoformat(),
             'end': utc_to_local(dataset.visit.end_date).isoformat(),
             'title': dataset.visit.title,
-            'type': {
-                'id': dataset.visit.type.id,
-                'name': dataset.visit.type.name_long
-            },
-            'pi': {
-                'id': dataset.visit.pi.id,
-                'first_names': dataset.visit.pi.first_names,
-                'last_name': dataset.visit.pi.last_name,
-                'org': {
-                    'id': dataset.visit.pi.org.id,
-                    'name': dataset.visit.pi.org.name_long
-                }
+        },
+        'type': {
+            'id': dataset.visit.type.id,
+            'name_short': dataset.visit.type.name_short,
+            'name_long': dataset.visit.type.name_long
+        },
+        'pi': {
+            'id': dataset.visit.pi.id,
+            'first_names': dataset.visit.pi.first_names,
+            'last_name': dataset.visit.pi.last_name,
+            'email': dataset.visit.pi.email,
+            'org': {
+                'id': dataset.visit.pi.org.id,
+                'name_short': dataset.visit.pi.org.name_short,
+                'name_long': dataset.visit.pi.org.name_long
             }
         }
     }
