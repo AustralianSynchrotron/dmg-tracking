@@ -1,6 +1,8 @@
 import os
 from tzlocal import get_localzone
 
+from app.version import __version__
+
 
 class Config:
     SECRET_KEY = os.environ.get('SECRET_KEY', default='super-secret-phrase')
@@ -19,5 +21,12 @@ class Config:
     }
 
     SWAGGER = {
-        'specs_route': '/docs/'
+        'specs_route': '/docs/',
+        'title': 'dmg-tracking API Documentation',
+        'uiversion': 3,
+        'description': 'This page describes the RESTful API of the dmg-tracking '+
+                       'microservice. All request parameters and the full response '+
+                       'content for each endpoint is described.',
+        'termsOfService': '',
+        "version": __version__
     }

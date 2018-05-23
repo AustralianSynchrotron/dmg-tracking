@@ -1,6 +1,6 @@
 from flask import Blueprint
 
-from app import __version__
+from app.version import __version__
 from toolset import ApiResponse
 
 

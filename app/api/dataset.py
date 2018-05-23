@@ -27,22 +27,40 @@ api = Blueprint('dataset', __name__, url_prefix='/dataset')
 }, extra=REMOVE_EXTRA), format='json')
 def create_dataset(epn):
     """
-    Create a new, dataset for an EPN and a beamline.
+    Create a new dataset for an existing visit
 
     The visit information is being retrieved from the User Portal API.
 
     ---
+    tags:
+     - Dataset
+    consumes:
+     - application/json
+    produces:
+     - application/json
     parameters:
-      - name: epn
-        in: query
-        type: string
-        required: true
+     - name: body
+       in: body
+       description: Blablabla
+       schema:
+         type: object
+         properties:
+           epn:
+             type: string
+         required: ['epn']
+         additionalProperties: false
     responses:
-      200:
-        description: The EPN and the id of the newly created dataset
-        examples:
-          epn: 1234a
-          id: 5ae30aa3aaaa2f4d8096f575
+     200:
+       description: The EPN and the id of the newly created dataset
+       schema:
+         properties:
+           epn:
+             type: string
+           id:
+             type: string
+       examples:
+         epn: 1234a
+         id: 5ae30aa3aaaa2f4d8096f575
     """
     try:
         visit = _get_visit_from_portal(epn)
@@ -83,6 +101,17 @@ def create_dataset(epn):
     'email': Email()
 }, extra=REMOVE_EXTRA))
 def search_datasets(**kwargs):
+    """
+    Search for datasets
+
+    ---
+    tags:
+     - Dataset
+    consumes:
+     - application/json
+    produces:
+     - application/json
+    """
     params_map = {
         'beamline': 'visit.beamline',
         'email': 'visit.pi.email'
@@ -100,6 +129,30 @@ def search_datasets(**kwargs):
 
 @api.route('/<epn>', methods=['GET'])
 def retrieve_dataset(epn):
+    """
+    Retrieve the basic information of a dataset
+
+    More information here
+    ---
+    tags:
+     - Dataset
+    consumes:
+     - application/json
+    produces:
+     - application/json
+    parameters:
+     - name: epn
+       in: path
+       required: true
+       type: string
+       description: The EPN of the experiment for which the dataset should be returned.
+    responses:
+      200:
+        description: The EPN and the id of the newly created dataset
+        examples:
+          epn: 1234a
+          id: 5ae30aa3aaaa2f4d8096f575
+    """
     try:
         ds = Dataset.objects(epn=epn).first()
         if ds is not None:
@@ -118,6 +171,17 @@ def retrieve_dataset(epn):
 
 @api.route('/<epn>', methods=['DELETE'])
 def delete_dataset(epn):
+    """
+    Delete a dataset
+
+    ---
+    tags:
+     - Dataset
+    consumes:
+     - application/json
+    produces:
+     - application/json
+    """
     ds = Dataset.objects(epn=epn).first()
     if ds is not None:
         ds.delete()
@@ -133,6 +197,17 @@ def delete_dataset(epn):
 # ---------------------------------------------------------------------------------------------------------------------
 @api.route('/<epn>/visit', methods=['PUT'])
 def update_visit(epn):
+    """
+    Update the visit information of a dataset
+
+    ---
+    tags:
+     - Visit
+    consumes:
+     - application/json
+    produces:
+     - application/json
+    """
     try:
         ds = Dataset.objects(epn=epn).first()
         if ds is not None:
@@ -169,6 +244,17 @@ def update_visit(epn):
     Optional('error', default=''): str
 }, extra=REMOVE_EXTRA), format='json')
 def add_storage_event(epn, name, **kwargs):
+    """
+    Add a new entry to the history of a storage item
+
+    ---
+    tags:
+     - Storage
+    consumes:
+     - application/json
+    produces:
+     - application/json
+    """
     try:
         ds = Dataset.objects(epn=epn).first()
         if ds is not None:
@@ -197,7 +283,17 @@ def add_storage_event(epn, name, **kwargs):
 
 @api.route('/<epn>/storage', methods=['GET'])
 def retrieve_storage_details(epn):
-    """ Retrieve all storage entries with their full history"""
+    """
+    Retrieve all storage items with their full history
+
+    ---
+    tags:
+     - Storage
+    consumes:
+     - application/json
+    produces:
+     - application/json
+    """
     try:
         ds = Dataset.objects(epn=epn).first()
         if ds is not None:
@@ -219,7 +315,17 @@ def retrieve_storage_details(epn):
 
 @api.route('/<epn>/storage/last', methods=['GET'])
 def retrieve_storage_last(epn):
-    """ Retrieve all storage entries with their most recent history entry"""
+    """
+    Retrieve all storage items with their most recent history entry
+
+    ---
+    tags:
+     - Storage
+    consumes:
+     - application/json
+    produces:
+     - application/json
+    """
     try:
         ds = Dataset.objects(epn=epn).first()
         if ds is not None:
@@ -252,6 +358,17 @@ def retrieve_storage_last(epn):
     Required('notes'): str
 }, extra=REMOVE_EXTRA), format='json')
 def add_lifecycle_renew_state(epn, days=None, expiry_date=None, **kwargs):
+    """
+    Transition a dataset to the renew state
+
+    ---
+    tags:
+     - Lifecycle
+    consumes:
+     - application/json
+    produces:
+     - application/json
+    """
     try:
         ds = Dataset.objects(epn=epn).first()
         if ds is not None:
@@ -319,6 +436,17 @@ def add_lifecycle_renew_state(epn, days=None, expiry_date=None, **kwargs):
     Optional('notes', default=''): str
 }, extra=REMOVE_EXTRA), format='json')
 def add_lifecycle_delete_state(epn, removed, **kwargs):
+    """
+    Transition a dataset to the dropped or delete state
+
+    ---
+    tags:
+     - Lifecycle
+    consumes:
+     - application/json
+    produces:
+     - application/json
+    """
     try:
         ds = Dataset.objects(epn=epn).first()
         if ds is not None:
@@ -370,6 +498,17 @@ def add_lifecycle_delete_state(epn, removed, **kwargs):
 
 @api.route('/<epn>/lifecycle', methods=['PUT'])
 def update_lifecycle_expiry_state(epn):
+    """
+    Transition to the expired state if the expiry date has passed
+
+    ---
+    tags:
+     - Lifecycle
+    consumes:
+     - application/json
+    produces:
+     - application/json
+    """
     try:
         ds = Dataset.objects(epn=epn).first()
         if ds is not None:
@@ -416,7 +555,17 @@ def update_lifecycle_expiry_state(epn):
 
 @api.route('/<epn>/lifecycle', methods=['GET'])
 def retrieve_lifecycle_details(epn):
-    """ Retrieve all lifecycle state"""
+    """
+    Retrieve all lifecycle states
+
+    ---
+    tags:
+     - Lifecycle
+    consumes:
+     - application/json
+    produces:
+     - application/json
+    """
     try:
         ds = Dataset.objects(epn=epn).first()
         if ds is not None:
@@ -437,7 +586,17 @@ def retrieve_lifecycle_details(epn):
 
 @api.route('/<epn>/lifecycle/last', methods=['GET'])
 def retrieve_lifecycle_last(epn):
-    """ Retrieve most recent lifecycle state"""
+    """
+    Retrieve most recent lifecycle state
+
+    ---
+    tags:
+     - Lifecycle
+    consumes:
+     - application/json
+    produces:
+     - application/json
+    """
     try:
         ds = Dataset.objects(epn=epn).first()
         if ds is not None:
