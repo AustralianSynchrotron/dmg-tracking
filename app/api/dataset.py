@@ -3,7 +3,8 @@ from datetime import datetime, timedelta
 from dateutil import parser
 from portalapi import Authentication, PortalAPI
 from portalapi.exceptions import AuthenticationFailed, RequestFailed
-from voluptuous import Schema, Required, Optional, Coerce, Email, Datetime, REMOVE_EXTRA
+from voluptuous import (Schema, Required, Optional, Coerce, Email, Datetime, Boolean,
+                        REMOVE_EXTRA)
 from mongoengine.errors import NotUniqueError, InvalidDocumentError
 
 from .utils import sanitize_keys, utc_to_local
@@ -312,32 +313,43 @@ def add_lifecycle_renew_state(epn, days=None, expiry_date=None, **kwargs):
 
 @api.route('/<epn>/lifecycle', methods=['DELETE'])
 @dataschema(Schema({
-
+    Optional('removed', default=False): Boolean(),
     Required('user_id'): Coerce(int),
     Required('user_name'): str,
     Optional('notes', default=''): str
 }, extra=REMOVE_EXTRA), format='json')
-def add_lifecycle_delete_state(epn, **kwargs):
+def add_lifecycle_delete_state(epn, removed, **kwargs):
     try:
         ds = Dataset.objects(epn=epn).first()
         if ds is not None:
             if len(ds.lifecycle) > 0:
                 current_state = ds.lifecycle[-1]
             else:
-                current_state = None
-
-            # check that the dataset is in a state in which it can be deleted
-            if (current_state is not None) and\
-                    (current_state.type == LifecycleStateType.DELETED):
                 raise ApiError(
                     StatusCode.InternalServerError,
-                    'The dataset has already been marked as deleted')
+                    'The dataset is not in a valid lifecycle state')
+
+            # check the current status of the dataset
+            if removed:
+                state_type = LifecycleStateType.DELETED
+                if current_state.type != LifecycleStateType.DROPPED:
+                    raise ApiError(
+                        StatusCode.InternalServerError,
+                        'The dataset has to be in the {} state before it can be deleted'
+                            .format(LifecycleStateType.DROPPED))
+            else:
+                state_type = LifecycleStateType.DROPPED
+                if current_state.type == LifecycleStateType.DROPPED:
+                    raise ApiError(
+                        StatusCode.InternalServerError,
+                        'The dataset has already been marked for deletion')
 
             ds.lifecycle.append(
                 LifecycleState(
-                    type=LifecycleStateType.DELETED,
+                    type=state_type,
                     created_at=datetime.now(tz=current_app.config['TIMEZONE']),
-                    expires_on=None,
+                    expires_on=utc_to_local(current_state.expires_on)
+                               if current_state is not None else None,
                     **kwargs)
             )
             ds.save()
