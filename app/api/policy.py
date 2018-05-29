@@ -2,7 +2,6 @@ from flask import Blueprint
 from voluptuous import Schema, Required, Optional, Coerce, REMOVE_EXTRA
 from mongoengine.errors import NotUniqueError, InvalidDocumentError
 
-from .utils import convert_dict_to_update
 from app.models import Policy
 from toolset.decorators import dataschema
 from toolset import ApiResponse, ApiError, StatusCode
@@ -19,6 +18,7 @@ api = Blueprint('policy', __name__, url_prefix='/policy')
     Required('beamline'): str,
     Required('retention'): Coerce(int),
     Required('quota'): Coerce(int),
+    Required('exclude'): list([int]),
     Optional('notes', default=''): str
 }, extra=REMOVE_EXTRA), format='json')
 def create_policy(beamline, **kwargs):
@@ -54,17 +54,21 @@ def retrieve_policy(beamline):
 @dataschema(Schema({
     'retention': Coerce(int),
     'quota': Coerce(int),
+    'exclude': list([int]),
     'notes': str
 }, extra=REMOVE_EXTRA), format='json')
 def update_policy(beamline, **kwargs):
     try:
-        pl = Policy.objects(beamline=beamline)
-        if pl.first() is not None:
-            pl.update_one(**convert_dict_to_update(kwargs))
+        pl = Policy.objects(beamline=beamline).first()
+        if pl is not None:
+            for key, value in kwargs.items():
+                setattr(pl, key, value)
+
+            pl.save()
 
             return ApiResponse({
                 'beamline': beamline,
-                'id': str(pl.first().id)
+                'id': str(pl.id)
             })
         else:
             raise ApiError(
@@ -96,5 +100,6 @@ def _build_policy_response(policy):
         'beamline': policy.beamline,
         'retention': policy.retention,
         'quota': policy.quota,
+        'exclude': policy.exclude,
         'notes': policy.notes
     }

@@ -71,13 +71,19 @@ def create_dataset(epn):
                 StatusCode.InternalServerError,
                 'A policy for the {} beamline does not exist'.format(visit.beamline))
 
+        # Excluded experiment types don't expire
+        if visit.type.id in pl.exclude:
+            expiry_date = None
+        else:
+            expiry_date = visit.start_date + timedelta(days=pl.retention)
+
         new_ds = Dataset(epn=epn, notes='',
                          visit=visit,
                          storage={},
                          lifecycle=[LifecycleState(
                              type=LifecycleStateType.NORMAL,
                              created_at=datetime.now(tz=current_app.config['TIMEZONE']),
-                             expires_on=visit.start_date + timedelta(days=pl.retention),
+                             expires_on=expiry_date,
                              user_id=None,
                              user_name='auto',
                              notes='auto generated during dataset creation')
@@ -373,6 +379,17 @@ def add_lifecycle_renew_state(epn, days=None, expiry_date=None, **kwargs):
         ds = Dataset.objects(epn=epn).first()
         if ds is not None:
 
+            # check that the dataset is not excluded from the policy
+            pl = Policy.objects(beamline=ds.visit.beamline).first()
+            if pl is None:
+                raise ApiError(
+                    StatusCode.InternalServerError,
+                    'A policy for {} does not exist'.format(ds.visit.beamline))
+            elif ds.visit.type.id in pl.exclude:
+                raise ApiError(
+                    StatusCode.InternalServerError,
+                    'The policy does not allow the dataset to be renewed')
+
             # check that the dataset is in a state in which it can be renewed
             if len(ds.lifecycle) == 0:
                 raise ApiError(
@@ -513,21 +530,32 @@ def update_lifecycle_expiry_state(epn):
         ds = Dataset.objects(epn=epn).first()
         if ds is not None:
 
+            # check that the dataset has a policy attached
+            pl = Policy.objects(beamline=ds.visit.beamline).first()
+            if pl is None:
+                raise ApiError(
+                    StatusCode.InternalServerError,
+                    'A policy for {} does not exist'.format(ds.visit.beamline))
+
+            # check that the dataset is in a state in which it can be expired
             if len(ds.lifecycle) == 0:
                 raise ApiError(
                     StatusCode.InternalServerError,
-                    'Cannot renew a dataset that has no lifecycle state yet')
+                    'Cannot expire a dataset that has no lifecycle state yet')
 
             current_state = ds.lifecycle[-1]
 
-            # check that the dataset is in the correct state
-            if current_state.type in [LifecycleStateType.NORMAL,
-                                      LifecycleStateType.RENEWED]:
+            # check that the dataset is not excluded and in the correct state
+            changed_to_expired = False
+            if (ds.visit.type.id not in pl.exclude) and (current_state.type in
+                                                         [LifecycleStateType.NORMAL,
+                                                          LifecycleStateType.RENEWED]):
 
                 # check whether it has expired
                 if datetime.now(tz=current_app.config['TIMEZONE']) > \
                         utc_to_local(current_state.expires_on):
 
+                    changed_to_expired = True
                     ds.lifecycle.append(
                         LifecycleState(
                             type=LifecycleStateType.EXPIRED,
@@ -541,7 +569,8 @@ def update_lifecycle_expiry_state(epn):
 
             return ApiResponse({
                 'epn': epn,
-                'id': str(ds.id)
+                'id': str(ds.id),
+                'changed': changed_to_expired
             })
         else:
             raise ApiError(
