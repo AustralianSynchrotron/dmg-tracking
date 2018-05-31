@@ -18,7 +18,7 @@ api = Blueprint('policy', __name__, url_prefix='/policy')
     Required('beamline'): str,
     Required('retention'): Coerce(int),
     Required('quota'): Coerce(int),
-    Required('exclude'): list([int]),
+    Optional('exclude', default=[]): list([int]),
     Optional('notes', default=''): str
 }, extra=REMOVE_EXTRA), format='json')
 def create_policy(beamline, **kwargs):
