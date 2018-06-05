@@ -65,12 +65,7 @@ def create_dataset(epn):
     """
     try:
         visit = _get_visit_from_portal(epn)
-        pl = Policy.objects(beamline=visit.beamline).first()
-
-        if pl is None:
-            raise ApiError(
-                StatusCode.InternalServerError,
-                'A policy for the {} beamline does not exist'.format(visit.beamline))
+        pl = _get_policy(visit.beamline)
 
         # Excluded experiment types don't expire
         if visit.type.id in pl.exclude:
@@ -403,12 +398,8 @@ def add_lifecycle_renew_state(epn, days=None, expiry_date=None, **kwargs):
         if ds is not None:
 
             # check that the dataset is not excluded from the policy
-            pl = Policy.objects(beamline=ds.visit.beamline).first()
-            if pl is None:
-                raise ApiError(
-                    StatusCode.InternalServerError,
-                    'A policy for {} does not exist'.format(ds.visit.beamline))
-            elif ds.visit.type.id in pl.exclude:
+            pl = _get_policy(ds.visit.beamline)
+            if ds.visit.type.id in pl.exclude:
                 raise ApiError(
                     StatusCode.InternalServerError,
                     'The policy does not allow the dataset to be renewed')
@@ -430,12 +421,7 @@ def add_lifecycle_renew_state(epn, days=None, expiry_date=None, **kwargs):
             # if neither a number of days was provided nor an expiry date,
             # extend the expiry date by the retention days given in the policy
             if (days is None) and (expiry_date is None):
-                pl = Policy.objects(beamline=ds.visit.beamline).first()
-                if pl is None:
-                    raise ApiError(
-                        StatusCode.InternalServerError,
-                        'A policy for the {} beamline does not exist'.format(
-                            ds.visit.beamline))
+                pl = _get_policy(ds.visit.beamline)
                 expires_on = utc_to_local(current_state.expires_on) +\
                              timedelta(days=pl.retention)
 
@@ -556,13 +542,7 @@ def update_lifecycle_expiry_state(epn):
     try:
         ds = Dataset.objects(epn=epn).first()
         if ds is not None:
-
-            # check that the dataset has a policy attached
-            pl = Policy.objects(beamline=ds.visit.beamline).first()
-            if pl is None:
-                raise ApiError(
-                    StatusCode.InternalServerError,
-                    'A policy for {} does not exist'.format(ds.visit.beamline))
+            pl = _get_policy(ds.visit.beamline)
 
             # check that the dataset is in a state in which it can be expired
             if len(ds.lifecycle) == 0:
@@ -725,7 +705,19 @@ def _get_visit_from_portal(epn):
     )
 
 
+def _get_policy(beamline):
+    pl = Policy.objects(beamline=beamline).first()
+    if pl is None:
+        raise ApiError(
+            StatusCode.InternalServerError,
+            'A policy for the {} beamline does not exist'.format(beamline))
+    else:
+        return pl
+
+
 def _build_dataset_response(dataset):
+    pl = _get_policy(dataset.visit.beamline)
+
     storage_items = []
     for name, event in dataset.storage.items():
         last_event = event[0]
@@ -743,6 +735,7 @@ def _build_dataset_response(dataset):
         'epn': dataset.epn,
         'beamline': dataset.visit.beamline,
         'status': last_lifecycle_state.type,
+        'excluded': dataset.visit.type.id in pl.exclude,
         'expires_on': utc_to_local(last_lifecycle_state.expires_on).isoformat()
                       if last_lifecycle_state.expires_on is not None else None,
         'available':
