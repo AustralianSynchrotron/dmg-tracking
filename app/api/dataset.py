@@ -3,11 +3,12 @@ from datetime import datetime, timedelta
 from dateutil import parser
 from portalapi import Authentication, PortalAPI
 from portalapi.exceptions import AuthenticationFailed, RequestFailed
-from voluptuous import (Schema, Required, Optional, Coerce, Email, Datetime, Boolean,
+from voluptuous import (Schema, Required, Optional, Coerce, Any, Datetime, Boolean,
                         REMOVE_EXTRA)
+from mongoengine.queryset.visitor import Q
 from mongoengine.errors import NotUniqueError, InvalidDocumentError
 
-from .utils import sanitize_keys, utc_to_local
+from .utils import utc_to_local
 from .const import LifecycleStateType
 from app.models import (Dataset, Visit, VisitType, PrincipalInvestigator,
                         Organisation, StorageEvent, LifecycleState, Policy)
@@ -104,7 +105,12 @@ def create_dataset(epn):
 @dataschema(Schema({
     'epn': str,
     'beamline': str,
-    'email': Email()
+    'pi_name': str,
+    'pi_email': str,
+    'pi_org': str,
+    'status': Any(LifecycleStateType.NORMAL, LifecycleStateType.EXPIRED,
+                  LifecycleStateType.RENEWED, LifecycleStateType.DROPPED,
+                  LifecycleStateType.DELETED)
 }, extra=REMOVE_EXTRA))
 def search_datasets(**kwargs):
     """
@@ -118,13 +124,29 @@ def search_datasets(**kwargs):
     produces:
      - application/json
     """
-    params_map = {
-        'beamline': 'visit.beamline',
-        'email': 'visit.pi.email'
-    }
+    query = Q()
+    if 'epn' in kwargs:
+        query = query & Q(epn__icontains=kwargs['epn'])
 
-    query = {sanitize_keys(params_map.get(k, k)): v for k, v in kwargs.items()}
-    ds = Dataset.objects(**query)
+    if 'beamline' in kwargs:
+        query = query & Q(visit__beamline__exact=kwargs['beamline'])
+
+    if 'pi_name' in kwargs:
+        query = query & (Q(visit__pi__first_names__icontains=kwargs['pi_name']) |
+                         Q(visit__pi__last_name__icontains=kwargs['pi_name']))
+
+    if 'pi_email' in kwargs:
+        query = query & Q(visit__pi__email__icontains=kwargs['pi_email'])
+
+    if 'pi_org' in kwargs:
+        query = query & (Q(visit__pi__org__name_short__icontains=kwargs['pi_org']) |
+                         Q(visit__pi__org__name_long__icontains=kwargs['pi_org']))
+
+    if 'status' in kwargs:
+        query = query & Q(lifecycle__0__type__exact=kwargs['status'])
+
+    ds = Dataset.objects(query)
+
     if ds is not None:
         return ApiResponse({'datasets': [_build_dataset_response(d) for d in ds]})
     else:
@@ -267,7 +289,8 @@ def add_storage_event(epn, name, **kwargs):
             if name not in ds.storage:
                 ds.storage[name] = []
 
-            ds.storage[name].append(
+            ds.storage[name].insert(
+                0,
                 StorageEvent(created_at=datetime.now(tz=current_app.config['TIMEZONE']),
                              **kwargs)
             )
@@ -337,7 +360,7 @@ def retrieve_storage_last(epn):
         if ds is not None:
             response = {}
             for name, events in ds.storage.items():
-                response[name] = _build_storage_event_response(events[-1])\
+                response[name] = _build_storage_event_response(events[0])\
                     if len(events) > 0 else {}
 
             return ApiResponse({'storage': response})
@@ -396,7 +419,7 @@ def add_lifecycle_renew_state(epn, days=None, expiry_date=None, **kwargs):
                     StatusCode.InternalServerError,
                     'Cannot renew a dataset that has no lifecycle state yet')
 
-            current_state = ds.lifecycle[-1]
+            current_state = ds.lifecycle[0]
             if current_state.type not in [LifecycleStateType.NORMAL,
                                           LifecycleStateType.EXPIRED,
                                           LifecycleStateType.RENEWED]:
@@ -415,14 +438,17 @@ def add_lifecycle_renew_state(epn, days=None, expiry_date=None, **kwargs):
                             ds.visit.beamline))
                 expires_on = utc_to_local(current_state.expires_on) +\
                              timedelta(days=pl.retention)
+
             # if a number of days is not given but an expiry date, use the expiry date
             elif (days is None) and (expiry_date is not None):
                 expires_on = current_app.config['TIMEZONE'].localize(
                     parser.parse(expiry_date))
+
             else:
                 expires_on = utc_to_local(current_state.expires_on) + timedelta(days=days)
 
-            ds.lifecycle.append(
+            ds.lifecycle.insert(
+                0,
                 LifecycleState(
                     type=LifecycleStateType.RENEWED,
                     created_at=datetime.now(tz=current_app.config['TIMEZONE']),
@@ -468,7 +494,7 @@ def add_lifecycle_delete_state(epn, removed, **kwargs):
         ds = Dataset.objects(epn=epn).first()
         if ds is not None:
             if len(ds.lifecycle) > 0:
-                current_state = ds.lifecycle[-1]
+                current_state = ds.lifecycle[0]
             else:
                 raise ApiError(
                     StatusCode.InternalServerError,
@@ -489,7 +515,8 @@ def add_lifecycle_delete_state(epn, removed, **kwargs):
                         StatusCode.InternalServerError,
                         'The dataset has already been marked for deletion')
 
-            ds.lifecycle.append(
+            ds.lifecycle.insert(
+                0,
                 LifecycleState(
                     type=state_type,
                     created_at=datetime.now(tz=current_app.config['TIMEZONE']),
@@ -543,7 +570,7 @@ def update_lifecycle_expiry_state(epn):
                     StatusCode.InternalServerError,
                     'Cannot expire a dataset that has no lifecycle state yet')
 
-            current_state = ds.lifecycle[-1]
+            current_state = ds.lifecycle[0]
 
             # check that the dataset is not excluded and in the correct state
             changed_to_expired = False
@@ -556,7 +583,8 @@ def update_lifecycle_expiry_state(epn):
                         utc_to_local(current_state.expires_on):
 
                     changed_to_expired = True
-                    ds.lifecycle.append(
+                    ds.lifecycle.insert(
+                        0,
                         LifecycleState(
                             type=LifecycleStateType.EXPIRED,
                             created_at=datetime.now(tz=current_app.config['TIMEZONE']),
@@ -599,8 +627,7 @@ def retrieve_lifecycle_details(epn):
         ds = Dataset.objects(epn=epn).first()
         if ds is not None:
             return ApiResponse({
-                'lifecycle': [_build_lifecycle_state_response(ls)
-                              for ls in ds.lifecycle][::-1]
+                'lifecycle': [_build_lifecycle_state_response(ls) for ls in ds.lifecycle]
             })
         else:
             raise ApiError(
@@ -629,7 +656,7 @@ def retrieve_lifecycle_last(epn):
     try:
         ds = Dataset.objects(epn=epn).first()
         if ds is not None:
-            return ApiResponse(_build_lifecycle_state_response(ds.lifecycle[-1])
+            return ApiResponse(_build_lifecycle_state_response(ds.lifecycle[0])
                                if len(ds.lifecycle) > 0 else {})
         else:
             raise ApiError(
@@ -701,7 +728,7 @@ def _get_visit_from_portal(epn):
 def _build_dataset_response(dataset):
     storage_items = []
     for name, event in dataset.storage.items():
-        last_event = event[-1]
+        last_event = event[0]
         storage_items.append({
             'available': (last_event.size is not None) and
                          (last_event.count is not None) and
@@ -711,7 +738,7 @@ def _build_dataset_response(dataset):
             'count': last_event.count,
         })
 
-    last_lifecycle_state = dataset.lifecycle[-1]
+    last_lifecycle_state = dataset.lifecycle[0]
     return {
         'epn': dataset.epn,
         'beamline': dataset.visit.beamline,
