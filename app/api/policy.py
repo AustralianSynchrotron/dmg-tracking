@@ -1,6 +1,6 @@
 from flask import Blueprint
 from voluptuous import Schema, Required, Optional, Coerce, REMOVE_EXTRA
-from mongoengine.errors import NotUniqueError, InvalidDocumentError
+from mongoengine.errors import NotUniqueError, InvalidDocumentError, OperationError
 
 from app.models import Policy
 from toolset.decorators import dataschema
@@ -84,7 +84,13 @@ def update_policy(beamline, **kwargs):
 def delete_policy(beamline):
     pl = Policy.objects(beamline=beamline).first()
     if pl is not None:
-        pl.delete()
+        try:
+            pl.delete()
+        except OperationError:
+            raise ApiError(
+                StatusCode.InternalServerError,
+                'Cannot delete policy, a dataset is still using it')
+
         return ApiResponse({'beamline': beamline})
     else:
         raise ApiError(

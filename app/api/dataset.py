@@ -1,6 +1,7 @@
 from flask import Blueprint, current_app
 from datetime import datetime, timedelta
 from dateutil import parser
+from distutils.util import strtobool
 from portalapi import Authentication, PortalAPI
 from portalapi.exceptions import AuthenticationFailed, RequestFailed
 from voluptuous import (Schema, Required, Optional, Coerce, Any, Datetime, Boolean,
@@ -65,7 +66,12 @@ def create_dataset(epn):
     """
     try:
         visit = _get_visit_from_portal(epn)
-        pl = _get_policy(visit.beamline)
+
+        pl = Policy.objects(beamline=visit.beamline).first()
+        if pl is None:
+            raise ApiError(
+                StatusCode.InternalServerError,
+                'A policy for the {} beamline does not exist'.format(visit.beamline))
 
         # Excluded experiment types don't expire
         if visit.type.id in pl.exclude:
@@ -74,6 +80,7 @@ def create_dataset(epn):
             expiry_date = visit.start_date + timedelta(days=pl.retention)
 
         new_ds = Dataset(epn=epn, notes='',
+                         policy=pl,
                          visit=visit,
                          storage={},
                          lifecycle=[LifecycleState(
@@ -85,12 +92,7 @@ def create_dataset(epn):
                              notes='auto generated during dataset creation')
                          ])
         new_ds.save()
-        return ApiResponse({
-            'id': str(new_ds.id),
-            'epn': epn,
-            'beamline': new_ds.visit.beamline,
-            'pi': '{} {}'.format(new_ds.visit.pi.first_names, new_ds.visit.pi.last_name)
-        })
+        return ApiResponse(_build_dataset_response(new_ds))
     except NotUniqueError:
         raise ApiError(StatusCode.BadRequest,
                        'Dataset with EPN {} already exist'.format(epn))
@@ -105,7 +107,8 @@ def create_dataset(epn):
     'pi_org': str,
     'status': Any(LifecycleStateType.NORMAL, LifecycleStateType.EXPIRED,
                   LifecycleStateType.RENEWED, LifecycleStateType.DROPPED,
-                  LifecycleStateType.DELETED)
+                  LifecycleStateType.DELETED),
+    'excluded': str
 }, extra=REMOVE_EXTRA))
 def search_datasets(**kwargs):
     """
@@ -143,7 +146,17 @@ def search_datasets(**kwargs):
     ds = Dataset.objects(query)
 
     if ds is not None:
-        return ApiResponse({'datasets': [_build_dataset_response(d) for d in ds]})
+        # mongoDB doesn't do joins, so we have to perform the search manually
+        if 'excluded' in kwargs:
+            excluded = bool(strtobool(kwargs['excluded']))
+            datasets = []
+            for d in ds.select_related():
+                if (d.visit.type.id in d.policy.exclude) == excluded:
+                    datasets.append(d)
+        else:
+            datasets = ds
+
+        return ApiResponse({'datasets': [_build_dataset_response(d) for d in datasets]})
     else:
         raise ApiError(
             StatusCode.InternalServerError,
@@ -237,13 +250,7 @@ def update_visit(epn):
             ds.visit = _get_visit_from_portal(epn)
             ds.save()
 
-            return ApiResponse({
-                'epn': epn,
-                'id': str(ds.id),
-                'beamline': ds.visit.beamline,
-                'pi': '{} {}'.format(ds.visit.pi.first_names,
-                                     ds.visit.pi.last_name)
-            })
+            return ApiResponse(_build_dataset_response(ds))
         else:
             raise ApiError(
                 StatusCode.InternalServerError,
@@ -291,10 +298,7 @@ def add_storage_event(epn, name, **kwargs):
             )
             ds.save()
 
-            return ApiResponse({
-                'epn': epn,
-                'id': str(ds.id)
-            })
+            return ApiResponse(_build_storage_event_response(ds.storage[name][0]))
         else:
             raise ApiError(
                 StatusCode.InternalServerError,
@@ -398,8 +402,7 @@ def add_lifecycle_renew_state(epn, days=None, expiry_date=None, **kwargs):
         if ds is not None:
 
             # check that the dataset is not excluded from the policy
-            pl = _get_policy(ds.visit.beamline)
-            if ds.visit.type.id in pl.exclude:
+            if ds.visit.type.id in ds.policy.exclude:
                 raise ApiError(
                     StatusCode.InternalServerError,
                     'The policy does not allow the dataset to be renewed')
@@ -421,9 +424,8 @@ def add_lifecycle_renew_state(epn, days=None, expiry_date=None, **kwargs):
             # if neither a number of days was provided nor an expiry date,
             # extend the expiry date by the retention days given in the policy
             if (days is None) and (expiry_date is None):
-                pl = _get_policy(ds.visit.beamline)
                 expires_on = utc_to_local(current_state.expires_on) +\
-                             timedelta(days=pl.retention)
+                             timedelta(days=ds.policy.retention)
 
             # if a number of days is not given but an expiry date, use the expiry date
             elif (days is None) and (expiry_date is not None):
@@ -443,10 +445,7 @@ def add_lifecycle_renew_state(epn, days=None, expiry_date=None, **kwargs):
             )
             ds.save()
 
-            return ApiResponse({
-                'epn': epn,
-                'id': str(ds.id)
-            })
+            return ApiResponse(_build_lifecycle_state_response(ds.lifecycle[0]))
         else:
             raise ApiError(
                 StatusCode.InternalServerError,
@@ -493,7 +492,7 @@ def add_lifecycle_delete_state(epn, removed, **kwargs):
                     raise ApiError(
                         StatusCode.InternalServerError,
                         'The dataset has to be in the {} state before it can be deleted'
-                            .format(LifecycleStateType.DROPPED))
+                        .format(LifecycleStateType.DROPPED))
             else:
                 state_type = LifecycleStateType.DROPPED
                 if current_state.type == LifecycleStateType.DROPPED:
@@ -507,15 +506,12 @@ def add_lifecycle_delete_state(epn, removed, **kwargs):
                     type=state_type,
                     created_at=datetime.now(tz=current_app.config['TIMEZONE']),
                     expires_on=utc_to_local(current_state.expires_on)
-                               if current_state is not None else None,
+                    if current_state is not None else None,
                     **kwargs)
             )
             ds.save()
 
-            return ApiResponse({
-                'epn': epn,
-                'id': str(ds.id)
-            })
+            return ApiResponse(_build_lifecycle_state_response(ds.lifecycle[0]))
         else:
             raise ApiError(
                 StatusCode.InternalServerError,
@@ -542,8 +538,6 @@ def update_lifecycle_expiry_state(epn):
     try:
         ds = Dataset.objects(epn=epn).first()
         if ds is not None:
-            pl = _get_policy(ds.visit.beamline)
-
             # check that the dataset is in a state in which it can be expired
             if len(ds.lifecycle) == 0:
                 raise ApiError(
@@ -554,9 +548,9 @@ def update_lifecycle_expiry_state(epn):
 
             # check that the dataset is not excluded and in the correct state
             changed_to_expired = False
-            if (ds.visit.type.id not in pl.exclude) and (current_state.type in
-                                                         [LifecycleStateType.NORMAL,
-                                                          LifecycleStateType.RENEWED]):
+            if (ds.visit.type.id not in ds.policy.exclude) and\
+                    (current_state.type in [LifecycleStateType.NORMAL,
+                                            LifecycleStateType.RENEWED]):
 
                 # check whether it has expired
                 if datetime.now(tz=current_app.config['TIMEZONE']) > \
@@ -575,11 +569,8 @@ def update_lifecycle_expiry_state(epn):
                     )
                     ds.save()
 
-            return ApiResponse({
-                'epn': epn,
-                'id': str(ds.id),
-                'changed': changed_to_expired
-            })
+            return ApiResponse({**_build_lifecycle_state_response(ds.lifecycle[0]),
+                                **{'changed': changed_to_expired}})
         else:
             raise ApiError(
                 StatusCode.InternalServerError,
@@ -669,11 +660,11 @@ def _get_visit_from_portal(epn):
                        'Could not connect to the User Portal: {}'.format(e))
 
     # get visit information for the specified EPN
-    api = PortalAPI(auth)
+    portal_api = PortalAPI(auth)
 
     try:
-        vp = api.get_visit(epn, is_epn=True)
-        equipment = api.get_equipment(vp.equipment_id)
+        vp = portal_api.get_visit(epn, is_epn=True)
+        equipment = portal_api.get_equipment(vp.equipment_id)
 
     except RequestFailed as e:
         raise ApiError(StatusCode.BadRequest,
@@ -705,19 +696,7 @@ def _get_visit_from_portal(epn):
     )
 
 
-def _get_policy(beamline):
-    pl = Policy.objects(beamline=beamline).first()
-    if pl is None:
-        raise ApiError(
-            StatusCode.InternalServerError,
-            'A policy for the {} beamline does not exist'.format(beamline))
-    else:
-        return pl
-
-
 def _build_dataset_response(dataset):
-    pl = _get_policy(dataset.visit.beamline)
-
     storage_items = []
     for name, event in dataset.storage.items():
         last_event = event[0]
@@ -735,9 +714,10 @@ def _build_dataset_response(dataset):
         'epn': dataset.epn,
         'beamline': dataset.visit.beamline,
         'status': last_lifecycle_state.type,
-        'excluded': dataset.visit.type.id in pl.exclude,
-        'expires_on': utc_to_local(last_lifecycle_state.expires_on).isoformat()
-                      if last_lifecycle_state.expires_on is not None else None,
+        'excluded': dataset.visit.type.id in dataset.policy.exclude,
+        'expires_on':
+            utc_to_local(last_lifecycle_state.expires_on).isoformat()
+            if last_lifecycle_state.expires_on is not None else None,
         'available':
             all([item['available'] for item in storage_items])
             if len(storage_items) > 0 else False,
@@ -749,13 +729,13 @@ def _build_dataset_response(dataset):
             'id': dataset.visit.id,
             'start': utc_to_local(dataset.visit.start_date).isoformat(),
             'end': utc_to_local(dataset.visit.end_date).isoformat(),
-            'title': dataset.visit.title,
-        },
+            'title': dataset.visit.title
+            },
         'type': {
             'id': dataset.visit.type.id,
             'name_short': dataset.visit.type.name_short,
             'name_long': dataset.visit.type.name_long
-        },
+            },
         'pi': {
             'id': dataset.visit.pi.id,
             'first_names': dataset.visit.pi.first_names,
@@ -765,8 +745,8 @@ def _build_dataset_response(dataset):
                 'id': dataset.visit.pi.org.id,
                 'name_short': dataset.visit.pi.org.name_short,
                 'name_long': dataset.visit.pi.org.name_long
+                }
             }
-        }
     }
 
 
@@ -785,8 +765,9 @@ def _build_lifecycle_state_response(state):
     return {
         'type': state.type,
         'created_at': utc_to_local(state.created_at).isoformat(),
-        'expires_on': utc_to_local(state.expires_on).isoformat()
-                      if state.expires_on is not None else None,
+        'expires_on':
+            utc_to_local(state.expires_on).isoformat()
+            if state.expires_on is not None else None,
         'user_id': state.user_id,
         'user_name': state.user_name,
         'notes': state.notes

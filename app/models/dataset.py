@@ -1,7 +1,8 @@
-from mongoengine import (EmbeddedDocumentField, ListField, MapField, StringField,
-                         IntField, DateTimeField, EmailField)
+from mongoengine import (EmbeddedDocumentField, ReferenceField, ListField, MapField,
+                         StringField, IntField, DateTimeField, EmailField, DENY)
 
 from app import db
+from app.models.policy import Policy
 
 
 class Organisation(db.EmbeddedDocument):
@@ -55,6 +56,7 @@ class LifecycleState(db.EmbeddedDocument):
 class Dataset(db.Document):
     epn = StringField(required=True, unique=True)
     notes = StringField()
+    policy = ReferenceField(Policy, dbref=True, reverse_delete_rule=DENY)
     visit = EmbeddedDocumentField(Visit)
     storage = MapField(ListField(EmbeddedDocumentField(StorageEvent)))
     lifecycle = ListField(EmbeddedDocumentField(LifecycleState))
