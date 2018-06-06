@@ -25,10 +25,7 @@ def create_policy(beamline, **kwargs):
     try:
         new_pl = Policy(beamline=beamline, **kwargs)
         new_pl.save()
-        return ApiResponse({
-            'beamline': beamline,
-            'id': str(new_pl.id)
-        })
+        return ApiResponse(_build_policy_response(new_pl))
     except NotUniqueError:
         raise ApiError(StatusCode.BadRequest,
                        'A policy for {} already exist'.format(beamline))
@@ -65,11 +62,7 @@ def update_policy(beamline, **kwargs):
                 setattr(pl, key, value)
 
             pl.save()
-
-            return ApiResponse({
-                'beamline': beamline,
-                'id': str(pl.id)
-            })
+            return ApiResponse(_build_policy_response(pl))
         else:
             raise ApiError(
                 StatusCode.InternalServerError,
@@ -91,7 +84,7 @@ def delete_policy(beamline):
                 StatusCode.InternalServerError,
                 'Cannot delete policy, a dataset is still using it')
 
-        return ApiResponse({'beamline': beamline})
+        return ApiResponse({'deleted': True})
     else:
         raise ApiError(
             StatusCode.InternalServerError,

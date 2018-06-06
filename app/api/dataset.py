@@ -221,7 +221,10 @@ def delete_dataset(epn):
     ds = Dataset.objects(epn=epn).first()
     if ds is not None:
         ds.delete()
-        return ApiResponse({'epn': epn})
+        return ApiResponse({
+            'deleted': True,
+            'epn': epn
+        })
     else:
         raise ApiError(
             StatusCode.InternalServerError,
