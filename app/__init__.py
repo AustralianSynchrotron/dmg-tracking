@@ -1,12 +1,14 @@
 from werkzeug.utils import find_modules, import_string
 from flask_mongoengine import MongoEngine
 from flasgger import Swagger
+from flask_cors import CORS
 
 from config import Config
 from toolset import StatusCode, ApiError, Service
 
 
 db = MongoEngine()
+cors = CORS()
 swg = Swagger()
 
 
@@ -39,6 +41,7 @@ def create_app(config_class=Config):
     register_error_handlers(app)
 
     db.init_app(app)
+    cors.init_app(app)
     swg.init_app(app)
 
     return app
