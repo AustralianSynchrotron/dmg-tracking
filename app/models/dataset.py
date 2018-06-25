@@ -48,7 +48,7 @@ class LifecycleState(db.EmbeddedDocument):
     type = StringField()
     created_at = DateTimeField()
     expires_on = DateTimeField()
-    user_id = IntField()
+    user_id = StringField()
     user_name = StringField()
     notes = StringField()
 

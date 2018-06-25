@@ -31,6 +31,7 @@ def create_dataset(epn):
     """
     Create a new dataset for an existing visit
 
+    This endpoint creates a new dataset from an EPN. It requires a policy for the
     The visit information is being retrieved from the User Portal API.
 
     ---
@@ -384,7 +385,7 @@ def retrieve_storage_last(epn):
 @dataschema(Schema({
     Optional('days'): Coerce(int),
     Optional('expiry_date'): Datetime(format='%Y-%m-%dT%H:%M:%S'),
-    Required('user_id'): Coerce(int),
+    Required('user_id'): str,
     Required('user_name'): str,
     Required('notes'): str
 }, extra=REMOVE_EXTRA), format='json')
@@ -462,7 +463,7 @@ def add_lifecycle_renew_state(epn, days=None, expiry_date=None, **kwargs):
 @api.route('/<epn>/lifecycle', methods=['DELETE'])
 @dataschema(Schema({
     Optional('removed', default=False): Boolean(),
-    Required('user_id'): Coerce(int),
+    Required('user_id'): str,
     Required('user_name'): str,
     Optional('notes', default=''): str
 }, extra=REMOVE_EXTRA), format='json')
