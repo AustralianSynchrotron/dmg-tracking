@@ -75,7 +75,7 @@ def create_dataset(epn):
                 'A policy for the {} beamline does not exist'.format(visit.beamline))
 
         # Excluded experiment types don't expire
-        if visit.type.id in pl.exclude:
+        if _is_dataset_excluded(visit, pl):
             expiry_date = None
         else:
             expiry_date = visit.start_date + timedelta(days=pl.retention)
@@ -152,7 +152,7 @@ def search_datasets(**kwargs):
             excluded = bool(strtobool(kwargs['excluded']))
             datasets = []
             for d in ds.select_related():
-                if (d.visit.type.id in d.policy.exclude) == excluded:
+                if _is_dataset_excluded(d.visit, d.policy) == excluded:
                     datasets.append(d)
         else:
             datasets = ds
@@ -406,7 +406,7 @@ def add_lifecycle_renew_state(epn, days=None, expiry_date=None, **kwargs):
         if ds is not None:
 
             # check that the dataset is not excluded from the policy
-            if ds.visit.type.id in ds.policy.exclude:
+            if _is_dataset_excluded(ds.visit, ds.policy):
                 raise ApiError(
                     StatusCode.InternalServerError,
                     'The policy does not allow the dataset to be renewed')
@@ -552,7 +552,7 @@ def update_lifecycle_expiry_state(epn):
 
             # check that the dataset is not excluded and in the correct state
             changed_to_expired = False
-            if (ds.visit.type.id not in ds.policy.exclude) and\
+            if (not _is_dataset_excluded(ds.visit, ds.policy)) and\
                     (current_state.type in [LifecycleStateType.NORMAL,
                                             LifecycleStateType.RENEWED]):
 
@@ -700,6 +700,11 @@ def _get_visit_from_portal(epn):
     )
 
 
+def _is_dataset_excluded(visit, policy):
+    return (visit.type.id in policy.exclude_type) or\
+           (visit.pi.org.id in policy.exclude_org)
+
+
 def _build_dataset_response(dataset):
     storage_items = []
     for name, event in dataset.storage.items():
@@ -718,7 +723,7 @@ def _build_dataset_response(dataset):
         'epn': dataset.epn,
         'beamline': dataset.visit.beamline,
         'status': last_lifecycle_state.type,
-        'excluded': dataset.visit.type.id in dataset.policy.exclude,
+        'excluded': _is_dataset_excluded(dataset.visit, dataset.policy),
         'expires_on':
             utc_to_local(last_lifecycle_state.expires_on).isoformat()
             if last_lifecycle_state.expires_on is not None else None,

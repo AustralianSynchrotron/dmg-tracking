@@ -18,7 +18,8 @@ api = Blueprint('policy', __name__, url_prefix='/policy')
     Required('beamline'): str,
     Required('retention'): Coerce(int),
     Required('quota'): Coerce(int),
-    Optional('exclude', default=[]): list([int]),
+    Optional('exclude_type', default=[]): list([int]),
+    Optional('exclude_org', default=[]): list([int]),
     Optional('notes', default=''): str
 }, extra=REMOVE_EXTRA), format='json')
 def create_policy(beamline, **kwargs):
@@ -62,7 +63,8 @@ def retrieve_policy(beamline):
 @dataschema(Schema({
     'retention': Coerce(int),
     'quota': Coerce(int),
-    'exclude': list([int]),
+    'exclude_type': list([int]),
+    'exclude_org': list([int]),
     'notes': str
 }, extra=REMOVE_EXTRA), format='json')
 def update_policy(beamline, **kwargs):
@@ -110,6 +112,7 @@ def _build_policy_response(policy):
         'beamline': policy.beamline,
         'retention': policy.retention,
         'quota': policy.quota,
-        'exclude': policy.exclude,
+        'exclude_type': policy.exclude_type,
+        'exclude_org': policy.exclude_org,
         'notes': policy.notes
     }
