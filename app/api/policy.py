@@ -31,6 +31,17 @@ def create_policy(beamline, **kwargs):
                        'A policy for {} already exist'.format(beamline))
 
 
+@api.route('', methods=['GET'])
+def retrieve_all_policies():
+    try:
+        return ApiResponse({'policies': [_build_policy_response(pl)
+                                         for pl in Policy.objects()]})
+    except InvalidDocumentError:
+        raise ApiError(
+                StatusCode.InternalServerError,
+                'One of the policies seems to be damaged')
+
+
 @api.route('/<beamline>', methods=['GET'])
 def retrieve_policy(beamline):
     try:
