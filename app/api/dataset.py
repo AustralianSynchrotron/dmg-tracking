@@ -109,6 +109,7 @@ def create_dataset(epn):
     'status': Any(LifecycleStateType.NORMAL, LifecycleStateType.EXPIRED,
                   LifecycleStateType.RENEWED, LifecycleStateType.DROPPED,
                   LifecycleStateType.DELETED),
+    'type': str,
     'excluded': str
 }, extra=REMOVE_EXTRA))
 def search_datasets(**kwargs):
@@ -143,6 +144,10 @@ def search_datasets(**kwargs):
 
     if 'status' in kwargs:
         query = query & Q(lifecycle__0__type__exact=kwargs['status'])
+
+    if 'type' in kwargs:
+        query = query & (Q(visit__type__name_short__icontains=kwargs['type']) |
+                         Q(visit__type__name_long__icontains=kwargs['type']))
 
     ds = Dataset.objects(query)
 
