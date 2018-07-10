@@ -129,7 +129,7 @@ def search_datasets(**kwargs):
         query = query & Q(epn__icontains=kwargs['epn'])
 
     if 'beamline' in kwargs:
-        query = query & Q(visit__beamline__exact=kwargs['beamline'])
+        query = query & Q(visit__beamline__iexact=kwargs['beamline'])
 
     if 'pi_name' in kwargs:
         query = query & (Q(visit__pi__first_names__icontains=kwargs['pi_name']) |
