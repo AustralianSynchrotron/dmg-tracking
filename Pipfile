@@ -27,7 +27,7 @@ Flask-WTF = ">=0.14.2"
 MarkupSafe = ">=1.0"
 Werkzeug = ">=0.14.1"
 WTForms = ">=2.1"
-portalapi = {version=">=1.3.0", index="aspypi"}
+portalapi = {version=">=1.4.0", index="aspypi"}
 
 [dev-packages]
 
