@@ -662,7 +662,7 @@ def _get_visit_from_portal(epn):
             client_name=current_app.config['PORTAL_SETTINGS']['client'],
             client_password=current_app.config['PORTAL_SETTINGS']['password'],
             url=current_app.config['PORTAL_SETTINGS']['host'],
-            verify=current_app.config['PORTAL_SETTINGS'].get('verify', True)
+            verify=current_app.config['PORTAL_SETTINGS']['verify']
         )
         auth.login()
     except AuthenticationFailed as e:

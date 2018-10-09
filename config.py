@@ -12,7 +12,7 @@ class Config:
         'host': os.environ.get('PORTAL_HOST', default='localhost'),
         'client': os.environ.get('PORTAL_CLIENT', default=None),
         'password': os.environ.get('PORTAL_PASSWORD', default=None),
-        'verify': os.environ.get('PORTAL_VERIFY', default=True),
+        'verify': bool(os.environ.get('PORTAL_VERIFY', default='True'))
     }
 
     MONGODB_SETTINGS = {
