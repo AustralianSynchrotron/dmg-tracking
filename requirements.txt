@@ -19,4 +19,4 @@ python-dotenv>=0.8.2
 pytz>=2018.4
 tzlocal>=1.5.1
 python-dateutil>=2.7.3
-portalapi>=1.3.0
+portalapi>=1.4.0
